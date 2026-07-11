@@ -1,65 +1,49 @@
-import Image from "next/image";
+import { ListChecks, Link2, Sparkles } from "lucide-react";
+import { ToolCard } from "@/components/ToolCard";
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 py-14 sm:px-10">
+      <header className="mb-12">
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1 text-xs font-medium text-muted">
+          <span className="h-1.5 w-1.5 rounded-full bg-accent" />
+          100% local · aucune donnée envoyée à un serveur
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+        <h1 className="text-3xl font-semibold tracking-tight text-foreground sm:text-4xl">
+          Bienvenue sur la <span className="text-accent">UL Toolbox</span>
+        </h1>
+        <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-muted">
+          Votre boîte à outils pour les opérations de Media Trading et Social
+          Ads. Choisissez un outil ci-dessous pour démarrer.
+        </p>
+      </header>
+
+      <section>
+        <h2 className="mb-4 text-sm font-medium uppercase tracking-wide text-muted-soft">
+          Outils disponibles
+        </h2>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          <ToolCard
+            title="Prompt Builder"
+            description="Construisez un prompt d'analyse hebdomadaire à partir des données de campagne, du contexte et des benchmarks."
+            icon={Sparkles}
+            href="/prompt-builder"
+            available
+          />
+          <ToolCard
+            title="To-Do Campagne"
+            description="Suivez les actions à mener sur vos campagnes en cours, semaine après semaine."
+            icon={ListChecks}
+            available={false}
+          />
+          <ToolCard
+            title="Extracteur Tracking"
+            description="Extrayez et vérifiez rapidement les paramètres de tracking présents dans vos URLs de campagne."
+            icon={Link2}
+            available={false}
+          />
         </div>
-      </main>
+      </section>
     </div>
   );
 }

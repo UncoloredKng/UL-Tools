@@ -1,13 +1,12 @@
 "use client";
 
-import { useState, type ClipboardEvent } from "react";
-import { Sparkles, RotateCcw, ClipboardPaste } from "lucide-react";
+import { Sparkles, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { FieldLabel, Input, Textarea } from "@/components/ui/Field";
 import { Card } from "@/components/ui/Card";
 import { ToggleGroup } from "@/components/ui/ToggleGroup";
 import { KpiWeightingPanel } from "@/components/prompt-builder/KpiWeightingPanel";
-import { formatTsvForTextarea } from "@/lib/tsv";
+import { DataPasteField } from "@/components/prompt-builder/DataPasteField";
 import { buildPrompt } from "@/lib/generatePrompt";
 import type { Campaign, KpiWeights, ReportMode, WeekDraft } from "@/types/prompt-builder";
 
@@ -31,17 +30,6 @@ export function WeekDataForm({
   onGenerate,
 }: WeekDataFormProps) {
   const { draft } = campaign;
-  const [pasteHint, setPasteHint] = useState(false);
-
-  function handlePasteTcdData(e: ClipboardEvent<HTMLTextAreaElement>) {
-    const text = e.clipboardData.getData("text/plain");
-    if (!text.includes("\t")) return;
-    e.preventDefault();
-    const formatted = formatTsvForTextarea(text);
-    onUpdateDraft({ tcdData: formatted });
-    setPasteHint(true);
-    setTimeout(() => setPasteHint(false), 2000);
-  }
 
   function handleWeightChange(key: keyof KpiWeights, value: number) {
     onUpdateDraft({ kpiWeights: { ...draft.kpiWeights, [key]: value } });
@@ -104,53 +92,38 @@ export function WeekDataForm({
           />
         </div>
 
-        <div>
-          <FieldLabel
-            htmlFor="tcdData"
-            hint={pasteHint ? "Données Excel formatées ✓" : undefined}
-          >
-            Données TCD actualisées (coller depuis Excel)
-          </FieldLabel>
-          <div className="relative mt-1.5">
-            <Textarea
-              id="tcdData"
-              monospace
-              rows={8}
-              placeholder="Sélectionnez vos cellules dans Excel/Google Sheets, puis collez-les ici (Cmd/Ctrl+V)…"
-              value={draft.tcdData}
-              onChange={(e) => onUpdateDraft({ tcdData: e.target.value })}
-              onPaste={handlePasteTcdData}
-            />
-            <div className="pointer-events-none absolute right-3 top-3 flex items-center gap-1 text-muted-soft">
-              <ClipboardPaste className="h-3.5 w-3.5" />
-            </div>
-          </div>
-        </div>
+        <DataPasteField
+          id="tcdData"
+          label="Données TCD actualisées (coller depuis Excel)"
+          placeholder="Sélectionnez vos cellules dans Excel/Google Sheets, puis collez-les ici (Cmd/Ctrl+V)…"
+          value={draft.tcdData}
+          table={draft.tcdTable}
+          onChange={(tcdData, tcdTable) => onUpdateDraft({ tcdData, tcdTable })}
+          rows={8}
+        />
 
-        <div>
-          <FieldLabel htmlFor="bddData">Données brutes (export BDD)</FieldLabel>
-          <Textarea
-            id="bddData"
-            monospace
-            className="mt-1.5"
-            rows={5}
-            placeholder="Export brut issu de la base de données (logs, requêtes, extraction plateforme…)"
-            value={draft.bddData}
-            onChange={(e) => onUpdateDraft({ bddData: e.target.value })}
-          />
-        </div>
+        <DataPasteField
+          id="bddData"
+          label="Données brutes (export BDD)"
+          placeholder="Export brut issu de la base de données (logs, requêtes, extraction plateforme…)"
+          value={draft.bddData}
+          table={draft.bddTable}
+          onChange={(bddData, bddTable) => onUpdateDraft({ bddData, bddTable })}
+          rows={5}
+        />
 
-        <div>
-          <FieldLabel htmlFor="benchmarks">Benchmarks</FieldLabel>
-          <Textarea
-            id="benchmarks"
-            className="mt-1.5"
-            rows={3}
-            placeholder="Benchmarks internes ou marché à comparer aux performances…"
-            value={draft.benchmarks}
-            onChange={(e) => onUpdateDraft({ benchmarks: e.target.value })}
-          />
-        </div>
+        <DataPasteField
+          id="benchmarks"
+          label="Benchmarks"
+          placeholder="Benchmarks internes ou marché à comparer aux performances…"
+          value={draft.benchmarks}
+          table={draft.benchmarksTable}
+          onChange={(benchmarks, benchmarksTable) =>
+            onUpdateDraft({ benchmarks, benchmarksTable })
+          }
+          rows={3}
+          monospace={false}
+        />
 
         <div>
           <FieldLabel htmlFor="contexteAutre">Contexte / Autre</FieldLabel>

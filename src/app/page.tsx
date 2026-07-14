@@ -1,4 +1,4 @@
-import { ListChecks, Link2, Sparkles } from "lucide-react";
+import { LayoutGrid, ListChecks, Link2, Sparkles } from "lucide-react";
 import { ToolCard } from "@/components/ToolCard";
 
 export default function Home() {
@@ -38,9 +38,17 @@ export default function Home() {
           />
           <ToolCard
             title="Extracteur Tracking"
-            description="Extrayez et vérifiez rapidement les paramètres de tracking présents dans vos URLs de campagne."
+            description="Parsez les fichiers Flashtalking et Nielsen DAR, puis exportez les URLs de tracking fusionnées."
             icon={Link2}
-            available={false}
+            href="/tracking-extractor"
+            available
+          />
+          <ToolCard
+            title="DDS Creator"
+            description="Préparez la base d'un Doc de Structure via un formulaire : phases, publishers, segments et assets, puis export Excel."
+            icon={LayoutGrid}
+            href="/dds-creator"
+            available
           />
         </div>
       </section>

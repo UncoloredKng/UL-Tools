@@ -6,6 +6,7 @@ import {
   DEFAULT_REPORT_MODE,
   EMPTY_DRAFT,
   type Campaign,
+  type ExcelTable,
   type HistoryEntry,
   type KpiWeights,
   type ReportMode,
@@ -58,10 +59,23 @@ function normalizeMode(raw: unknown): ReportMode {
 }
 
 /**
+ * Valide grossièrement qu'une valeur persistée ressemble à un ExcelTable
+ * (présence d'un tableau `rows`). Toute donnée antérieure à l'ajout de cette
+ * fonctionnalité, ou invalide, retombe sur `null` (pas de vue Excel, simple
+ * fallback vers le texte brut).
+ */
+function normalizeExcelTable(raw: unknown): ExcelTable | null {
+  if (!raw || typeof raw !== "object") return null;
+  const rows = (raw as { rows?: unknown }).rows;
+  return Array.isArray(rows) ? (raw as ExcelTable) : null;
+}
+
+/**
  * Reconstruit un WeekDraft valide à partir de données potentiellement issues
  * d'un ancien schéma (avant renommage des champs : rawData → tcdData,
  * context → contexteAutre, aiComments → oldComments, ajout de bddData, de la
- * pondération KPI, puis du mode de rapport et des champs de lancement).
+ * pondération KPI, du mode de rapport, des champs de lancement, puis de la
+ * vue Excel structurée pour TCD/BDD/Benchmarks).
  */
 function normalizeDraft(raw: unknown): WeekDraft {
   const source = (raw ?? {}) as Record<string, unknown>;
@@ -72,8 +86,11 @@ function normalizeDraft(raw: unknown): WeekDraft {
     contexteGlobal: (source.contexteGlobal as string) ?? "",
     contexteCrea: (source.contexteCrea as string) ?? "",
     tcdData: (source.tcdData as string) ?? (source.rawData as string) ?? "",
+    tcdTable: normalizeExcelTable(source.tcdTable),
     bddData: (source.bddData as string) ?? "",
+    bddTable: normalizeExcelTable(source.bddTable),
     benchmarks: (source.benchmarks as string) ?? "",
+    benchmarksTable: normalizeExcelTable(source.benchmarksTable),
     contexteAutre: (source.contexteAutre as string) ?? (source.context as string) ?? "",
     useKpiWeighting: (source.useKpiWeighting as boolean) ?? false,
     kpiWeights: normalizeKpiWeights(source.kpiWeights),
@@ -224,7 +241,7 @@ export const useCampaignStore = create<CampaignStoreState>()(
     }),
     {
       name: "ul-toolbox-prompt-builder",
-      version: 2,
+      version: 3,
       storage: createJSONStorage(() =>
         typeof window !== "undefined" ? window.localStorage : noopStorage
       ),

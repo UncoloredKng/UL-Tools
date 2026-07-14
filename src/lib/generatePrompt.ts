@@ -1,3 +1,4 @@
+import { describeMergedCells } from "@/lib/excelTable";
 import type { KpiWeights, WeekDraft } from "@/types/prompt-builder";
 
 const KPI_LABELS: Record<keyof KpiWeights, string> = {
@@ -63,10 +64,23 @@ function buildDynamicStep1(useKpiWeighting: boolean): string {
  * n'apparaît dans le prompt généré.
  */
 function buildPromptRun(draft: WeekDraft): string {
-  const { oldComments, tcdData, bddData, benchmarks, contexteAutre, useKpiWeighting } = draft;
+  const {
+    oldComments,
+    tcdData,
+    tcdTable,
+    bddData,
+    bddTable,
+    benchmarks,
+    benchmarksTable,
+    contexteAutre,
+    useKpiWeighting,
+  } = draft;
 
   const kpiSection = buildKpiSection(draft);
   const dynamicStep1 = buildDynamicStep1(useKpiWeighting);
+  const tcdNote = describeMergedCells(tcdTable);
+  const bddNote = describeMergedCells(bddTable);
+  const benchmarksNote = describeMergedCells(benchmarksTable);
 
   const promptFinal = `# 🧠 RÔLE & EXPERTISE
 Vous êtes un Expert en Social Media Advertising (Paid Social) et un Data Analyst Senior en agence média. Votre mission exclusive est d'analyser les performances de nos campagnes publicitaires et de rédiger le rapport hebdomadaire pour un client premium. Vous devez faire preuve d'un esprit critique aiguisé, d'une capacité de synthèse forte et d'une rigueur mathématique absolue.
@@ -83,15 +97,15 @@ ${oldComments}
 [DEBUT_DONNEES_TCD_ACTUALISEES]
 ${tcdData}
 [FIN_DONNEES_TCD_ACTUALISEES]
-
+${tcdNote}
 [DEBUT_BDD_SOCIAL_EXTRAIT]
 ${bddData}
 [FIN_BDD_SOCIAL_EXTRAIT]
-
+${bddNote}
 [DEBUT_BENCHMARKS_CAMPAGNE]
 ${benchmarks}
 [FIN_BENCHMARKS_CAMPAGNE]
-
+${benchmarksNote}
 [DEBUT_CONTEXTE_AUTRE]
 ${contexteAutre}
 [FIN_CONTEXTE_AUTRE]
@@ -149,9 +163,12 @@ function buildKpiPriorityBullet(useKpiWeighting: boolean): string {
  * prompt si `useKpiWeighting` est désactivé.
  */
 function buildPromptLancement(draft: WeekDraft): string {
-  const { contexteGlobal, contexteCrea, tcdData, bddData, useKpiWeighting } = draft;
+  const { contexteGlobal, contexteCrea, tcdData, tcdTable, bddData, bddTable, useKpiWeighting } =
+    draft;
   const dynamicKpiBlock = buildKpiSection(draft);
   const kpiPriorityBullet = buildKpiPriorityBullet(useKpiWeighting);
+  const tcdNote = describeMergedCells(tcdTable);
+  const bddNote = describeMergedCells(bddTable);
 
   const promptLancement = `# RÔLE & EXPERTISE
 Vous êtes un Expert en Social Media Advertising (Paid Social) et un Data Analyst Senior en agence média. Votre mission est de rédiger le **tout premier rapport de lancement** d'une nouvelle campagne pour un client premium. Vous devez garantir une exactitude mathématique absolue et faire preuve de pédagogie pour expliquer les premiers signaux.
@@ -175,12 +192,12 @@ ${contexteCrea}
 [DEBUT_DONNEES_TCD_ACTUALISEES]
 ${tcdData}
 [FIN_DONNEES_TCD_ACTUALISEES]
-
+${tcdNote}
 ### 4. BDD SOCIAL EXTRAIT
 [DEBUT_BDD_SOCIAL_EXTRAIT]
 ${bddData}
 [FIN_BDD_SOCIAL_EXTRAIT]
-
+${bddNote}
 ---
 
 # DIRECTIVES DE TRAVAIL (ÉTAPES PROTOCOLAIRES)

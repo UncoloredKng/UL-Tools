@@ -7,6 +7,24 @@ export interface KpiWeights {
 
 export type ReportMode = "lancement" | "run" | "bilan";
 
+/**
+ * Représentation structurée d'une cellule collée depuis Excel/Google Sheets
+ * (issue du parsing du `text/html` du presse-papiers). Ne conserve que ce
+ * qui est nécessaire pour reconstituer visuellement la hiérarchie du
+ * tableau source : fusions de cellules, mise en gras et alignement.
+ */
+export interface ExcelCell {
+  text: string;
+  colSpan: number;
+  rowSpan: number;
+  bold: boolean;
+  align: "left" | "center" | "right" | null;
+}
+
+export interface ExcelTable {
+  rows: ExcelCell[][];
+}
+
 export interface WeekDraft {
   weekLabel: string;
   mode: ReportMode;
@@ -14,8 +32,11 @@ export interface WeekDraft {
   contexteGlobal: string;
   contexteCrea: string;
   tcdData: string;
+  tcdTable: ExcelTable | null;
   bddData: string;
+  bddTable: ExcelTable | null;
   benchmarks: string;
+  benchmarksTable: ExcelTable | null;
   contexteAutre: string;
   useKpiWeighting: boolean;
   kpiWeights: KpiWeights;
@@ -62,8 +83,11 @@ export const EMPTY_DRAFT: WeekDraft = {
   contexteGlobal: "",
   contexteCrea: "",
   tcdData: "",
+  tcdTable: null,
   bddData: "",
+  bddTable: null,
   benchmarks: "",
+  benchmarksTable: null,
   contexteAutre: "",
   useKpiWeighting: false,
   kpiWeights: { ...DEFAULT_KPI_WEIGHTS },

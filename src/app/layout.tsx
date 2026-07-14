@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 
@@ -12,6 +12,19 @@ export const metadata: Metadata = {
   title: "UL Toolbox — Media Trading & Social Ads",
   description:
     "Boîte à outils interne pour les opérations de Media Trading et Social Ads.",
+  applicationName: "UL Toolbox",
+  appleWebApp: {
+    capable: true,
+    title: "UL Toolbox",
+    statusBarStyle: "black-translucent",
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#333333",
 };
 
 export default function RootLayout({

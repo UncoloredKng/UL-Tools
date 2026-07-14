@@ -108,6 +108,7 @@ function normalizeHistoryEntry(raw: unknown): HistoryEntry {
     contexteGlobal: (source.contexteGlobal as string) ?? "",
     contexteCrea: (source.contexteCrea as string) ?? "",
     tcdData: (source.tcdData as string) ?? (source.rawData as string) ?? "",
+    tcdTable: normalizeExcelTable(source.tcdTable),
     bddData: (source.bddData as string) ?? "",
     benchmarks: (source.benchmarks as string) ?? "",
     contexteAutre: (source.contexteAutre as string) ?? (source.context as string) ?? "",
@@ -201,6 +202,7 @@ export const useCampaignStore = create<CampaignStoreState>()(
               contexteGlobal: campaign.draft.contexteGlobal,
               contexteCrea: campaign.draft.contexteCrea,
               tcdData: campaign.draft.tcdData,
+              tcdTable: campaign.draft.tcdTable,
               bddData: campaign.draft.bddData,
               benchmarks: campaign.draft.benchmarks,
               contexteAutre: campaign.draft.contexteAutre,
@@ -241,7 +243,7 @@ export const useCampaignStore = create<CampaignStoreState>()(
     }),
     {
       name: "ul-toolbox-prompt-builder",
-      version: 3,
+      version: 4,
       storage: createJSONStorage(() =>
         typeof window !== "undefined" ? window.localStorage : noopStorage
       ),

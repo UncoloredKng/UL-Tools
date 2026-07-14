@@ -7,6 +7,7 @@ import { CampaignSwitcher } from "@/components/prompt-builder/CampaignSwitcher";
 import { WeekDataForm } from "@/components/prompt-builder/WeekDataForm";
 import { GeneratedPromptPanel } from "@/components/prompt-builder/GeneratedPromptPanel";
 import { HistoryList } from "@/components/prompt-builder/HistoryList";
+import { TcdComparator } from "@/components/prompt-builder/TcdComparator";
 import { useCampaignStore, useCampaignStoreHydrated } from "@/store/useCampaignStore";
 import type { Campaign } from "@/types/prompt-builder";
 
@@ -82,6 +83,7 @@ function CampaignWorkspace({ campaign }: { campaign: Campaign }) {
             setGeneratedPrompt("");
           }}
         />
+        <TcdComparator draft={campaign.draft} history={campaign.history} />
       </div>
       <div className="lg:col-span-1">
         <HistoryList

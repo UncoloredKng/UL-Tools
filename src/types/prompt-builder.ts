@@ -51,6 +51,7 @@ export interface HistoryEntry {
   contexteGlobal: string;
   contexteCrea: string;
   tcdData: string;
+  tcdTable: ExcelTable | null;
   bddData: string;
   benchmarks: string;
   contexteAutre: string;

@@ -1,4 +1,4 @@
-import { LayoutGrid, ListChecks, Link2, Sparkles } from "lucide-react";
+import { Compass, LayoutGrid, ListChecks, Link2, Sparkles } from "lucide-react";
 import { ToolCard } from "@/components/ToolCard";
 
 export default function Home() {
@@ -48,6 +48,13 @@ export default function Home() {
             description="Préparez la base d'un Doc de Structure via un formulaire : phases, publishers, segments et assets, puis export Excel."
             icon={LayoutGrid}
             href="/dds-creator"
+            available
+          />
+          <ToolCard
+            title="Strat Builder"
+            description="Structurez votre réflexion stratégique (plateformes, objectifs, assets) et ébauchez votre plan média sur une timeline."
+            icon={Compass}
+            href="/strat-builder"
             available
           />
         </div>

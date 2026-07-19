@@ -118,3 +118,72 @@ input[type="range"].slider-accent:focus-visible::-webkit-slider-thumb {
   outline: 2px solid var(--color-accent);
   outline-offset: 2px;
 }
+
+/* Éditeur de texte riche (TipTap) du Strat Builder */
+.strat-prose {
+  line-height: 1.6;
+  color: var(--color-foreground);
+}
+
+.strat-prose:focus {
+  outline: none;
+}
+
+.strat-prose p {
+  margin: 0 0 0.5em;
+}
+
+.strat-prose p:last-child {
+  margin-bottom: 0;
+}
+
+.strat-prose h3 {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0.6em 0 0.35em;
+  color: var(--color-foreground);
+}
+
+.strat-prose strong {
+  font-weight: 700;
+  color: var(--color-foreground);
+}
+
+.strat-prose ul,
+.strat-prose ol {
+  margin: 0.25em 0 0.5em;
+  padding-left: 1.35em;
+}
+
+.strat-prose ul {
+  list-style: disc;
+}
+
+.strat-prose ol {
+  list-style: decimal;
+}
+
+.strat-prose li {
+  margin: 0.15em 0;
+}
+
+.strat-prose li p {
+  margin: 0;
+}
+
+.strat-prose blockquote {
+  border-left: 3px solid var(--color-accent);
+  padding-left: 0.85em;
+  margin: 0.5em 0;
+  color: var(--color-muted);
+}
+
+/* Placeholder affiché quand l'éditeur est vide */
+.strat-prose p.is-editor-empty:first-child::before,
+.strat-prose.is-editor-empty::before {
+  content: attr(data-placeholder);
+  color: var(--color-muted-soft);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownRight,
   ArrowUpRight,
@@ -13,6 +13,7 @@ import {
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
 import { cn } from "@/lib/cn";
+import { listAvailableKpiHeaders } from "@/lib/tcdParser";
 import {
   analyzeMetricTrends,
   compareTcd,
@@ -98,10 +99,21 @@ function EvolutionCell({ comparison }: { comparison: MetricComparison }) {
 export function TcdComparator({ draft, history }: TcdComparatorProps) {
   const [referenceId, setReferenceId] = useState<string>(() => history[0]?.id ?? "");
   const [showTrends, setShowTrends] = useState(true);
+  const [selectedKpiKeys, setSelectedKpiKeys] = useState<string[]>([]);
 
   const effectiveReferenceId =
     history.find((entry) => entry.id === referenceId)?.id ?? history[0]?.id ?? "";
   const referenceEntry = history.find((entry) => entry.id === effectiveReferenceId) ?? null;
+
+  const availableKpis = useMemo(() => {
+    if (!referenceEntry || !draft.tcdData.trim()) return [];
+    return listAvailableKpiHeaders(
+      referenceEntry.tcdData,
+      referenceEntry.tcdTable ?? null,
+      draft.tcdData,
+      draft.tcdTable
+    );
+  }, [referenceEntry, draft.tcdData, draft.tcdTable]);
 
   const comparison = useMemo(() => {
     if (!referenceEntry || !draft.tcdData.trim()) return null;
@@ -109,9 +121,10 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
       referenceEntry.tcdData,
       referenceEntry.tcdTable ?? null,
       draft.tcdData,
-      draft.tcdTable
+      draft.tcdTable,
+      selectedKpiKeys
     );
-  }, [referenceEntry, draft.tcdData, draft.tcdTable]);
+  }, [referenceEntry, draft.tcdData, draft.tcdTable, selectedKpiKeys]);
 
   const trendAnalysis = useMemo(() => {
     if (!showTrends || history.length < 2 || !draft.tcdData.trim()) return [];
@@ -130,10 +143,29 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
       },
     ];
 
-    return analyzeMetricTrends(weeks);
-  }, [showTrends, history, draft.tcdData, draft.tcdTable, draft.weekLabel]);
+    return analyzeMetricTrends(weeks, selectedKpiKeys);
+  }, [showTrends, history, draft.tcdData, draft.tcdTable, draft.weekLabel, selectedKpiKeys]);
+
+  function toggleKpiFilter(key: string) {
+    setSelectedKpiKeys((current) => {
+      if (current.length === 0) {
+        return [key];
+      }
+      if (current.includes(key)) {
+        const next = current.filter((item) => item !== key);
+        return next;
+      }
+      return [...current, key];
+    });
+  }
 
   const currentWeekLabel = draft.weekLabel.trim() || "Semaine en cours";
+  const showingAllKpis = selectedKpiKeys.length === 0;
+
+  useEffect(() => {
+    const allowed = new Set(availableKpis.map((kpi) => kpi.key));
+    setSelectedKpiKeys((current) => current.filter((key) => allowed.has(key)));
+  }, [availableKpis]);
 
   return (
     <Card className="p-5 sm:p-6">
@@ -143,7 +175,8 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
           <div>
             <h2 className="text-base font-semibold text-foreground">Comparateur TCD</h2>
             <p className="text-xs text-muted">
-              Comparez les KPI du TCD actuel avec une semaine archivée pour mesurer l&apos;évolution.
+              Les KPI et leur ordre sont lus depuis votre collage TCD (semaine en cours et semaine
+              de référence).
             </p>
           </div>
         </div>
@@ -188,6 +221,51 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
             </div>
           </div>
 
+          {availableKpis.length > 0 && (
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <label className="text-xs font-medium text-muted">
+                  KPI à comparer
+                  <span className="ml-1 font-normal text-muted-soft">
+                    (détectés dans le TCD — aucune sélection = tous)
+                  </span>
+                </label>
+                {!showingAllKpis && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedKpiKeys([])}
+                    className="cursor-pointer text-xs text-accent hover:underline"
+                  >
+                    Afficher tous les KPI
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {availableKpis.map((kpi) => {
+                  const isActive =
+                    showingAllKpis || selectedKpiKeys.includes(kpi.key);
+                  return (
+                    <button
+                      key={kpi.key}
+                      type="button"
+                      onClick={() => toggleKpiFilter(kpi.key)}
+                      className={cn(
+                        "cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                        isActive && !showingAllKpis
+                          ? "border-transparent bg-accent text-accent-foreground"
+                          : showingAllKpis
+                            ? "border-border-soft bg-surface-soft text-foreground hover:border-accent/50"
+                            : "border-border-soft text-muted hover:border-border hover:text-foreground"
+                      )}
+                    >
+                      {kpi.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {comparison && (
             <>
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -213,7 +291,7 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
               {comparison.comparisons.length === 0 ? (
                 <p className="text-sm text-muted">
                   Impossible de comparer les deux jeux de données. Vérifiez le format du TCD
-                  (libellés en première colonne, valeurs numériques dans les colonnes suivantes).
+                  (en-têtes KPI en colonnes, ligne « Total » ou valeurs agrégées).
                 </p>
               ) : (
                 <div className="overflow-x-auto rounded-xl border border-border-soft">

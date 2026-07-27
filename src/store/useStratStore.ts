@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
+import { normalizeDocument } from "@/lib/stratBuilder";
 import {
   BLOCK_META,
   TIMELINE_COLORS,
   type Asset,
+  type AssetGroup,
   type Audience,
   type BlockType,
   type Objective,
@@ -49,15 +51,24 @@ export function createAsset(recommended = false): Asset {
   return { id: createId(), name: "", assetType: "", duration: "", recommended };
 }
 
+export function createAssetGroup(name = ""): AssetGroup {
+  return { id: createId(), name, assets: [createAsset()] };
+}
+
 export function createBlock(type: BlockType): StratBlock {
-  const base = { id: createId(), title: BLOCK_META[type].label, notes: "" };
+  const base = {
+    id: createId(),
+    title: BLOCK_META[type].label,
+    notes: "",
+    collapsed: false,
+  };
   switch (type) {
     case "platform-audience":
       return { ...base, type, platforms: [createPlatform()] };
     case "objectives":
       return { ...base, type, objectives: [createObjective()] };
     case "assets":
-      return { ...base, type, assets: [createAsset()] };
+      return { ...base, type, groups: [createAssetGroup()] };
   }
 }
 
@@ -65,6 +76,7 @@ export function createTimelineItem(startDate: string): TimelineItem {
   return {
     id: createId(),
     label: "Nouvelle ligne",
+    description: "",
     startDate,
     endDate: addDays(startDate, 6),
     platforms: [],
@@ -103,6 +115,7 @@ interface StratStoreState {
   setTimelineRange: (field: "startDate" | "endDate", value: string) => void;
   addTimelineItem: () => void;
   removeTimelineItem: (itemId: string) => void;
+  moveTimelineItem: (itemId: string, direction: "up" | "down") => void;
   updateTimelineItem: (itemId: string, patch: Partial<TimelineItem>) => void;
   /** Remplace tout le document (import JSON). */
   loadDocument: (document: StratDocument) => void;
@@ -195,6 +208,22 @@ export const useStratStore = create<StratStoreState>()(
           },
         })),
 
+      moveTimelineItem: (itemId, direction) =>
+        set((state) => {
+          const items = [...state.document.timeline.items];
+          const index = items.findIndex((item) => item.id === itemId);
+          if (index === -1) return state;
+          const target = direction === "up" ? index - 1 : index + 1;
+          if (target < 0 || target >= items.length) return state;
+          [items[index], items[target]] = [items[target], items[index]];
+          return {
+            document: {
+              ...state.document,
+              timeline: { ...state.document.timeline, items },
+            },
+          };
+        }),
+
       updateTimelineItem: (itemId, patch) =>
         set((state) => ({
           document: {
@@ -214,18 +243,16 @@ export const useStratStore = create<StratStoreState>()(
     }),
     {
       name: "ul-toolbox-strat-builder",
-      version: 2,
-      migrate: (persisted, version) => {
-        const state = persisted as { document?: StratDocument } | undefined;
-        // v1 → v2 : ajoute smartbidding + budgets par audience aux lignes.
-        if (version < 2 && state?.document?.timeline?.items) {
-          state.document.timeline.items = state.document.timeline.items.map(
-            (item) => ({
-              ...item,
-              smartbidding: item.smartbidding ?? true,
-              audienceBudgets: item.audienceBudgets ?? {},
-            })
-          );
+      version: 3,
+      migrate: (persisted) => {
+        // Normalise l'état persisté vers le schéma courant (smartbidding,
+        // groupes d'adsets, blocs repliables, sous-titres de lignes…).
+        const state = persisted as { document?: unknown } | undefined;
+        if (state?.document) {
+          return {
+            ...(state as object),
+            document: normalizeDocument(state.document as Parameters<typeof normalizeDocument>[0]),
+          } as StratStoreState;
         }
         return state as StratStoreState;
       },

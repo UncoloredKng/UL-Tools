@@ -1,9 +1,18 @@
 "use client";
 
-import { ChevronUp, ChevronDown, Trash2, LayoutGrid, Target, Film } from "lucide-react";
+import {
+  ChevronUp,
+  ChevronDown,
+  ChevronRight,
+  Trash2,
+  LayoutGrid,
+  Target,
+  Film,
+} from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { BLOCK_META, type BlockType, type StratBlock } from "@/types/strat-builder";
 import { useStratStore } from "@/store/useStratStore";
+import { cn } from "@/lib/cn";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
@@ -33,9 +42,24 @@ export function StratBlockCard({ block, isFirst, isLast }: Props) {
   const update = (recipe: (b: StratBlock) => StratBlock) =>
     updateBlock(block.id, recipe);
 
+  const collapsed = block.collapsed ?? false;
+
   return (
     <Card className="p-5">
-      <div className="mb-4 flex items-center gap-2">
+      <div className={cn("flex items-center gap-2", !collapsed && "mb-4")}>
+        <button
+          type="button"
+          onClick={() => update((b) => ({ ...b, collapsed: !collapsed }))}
+          aria-label={collapsed ? "Déplier le bloc" : "Replier le bloc"}
+          aria-expanded={!collapsed}
+          className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface-hover hover:text-foreground"
+        >
+          {collapsed ? (
+            <ChevronRight className="h-4 w-4" />
+          ) : (
+            <ChevronDown className="h-4 w-4" />
+          )}
+        </button>
         <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-soft text-accent">
           <Icon className="h-5 w-5" strokeWidth={2} />
         </div>
@@ -79,21 +103,27 @@ export function StratBlockCard({ block, isFirst, isLast }: Props) {
         </div>
       </div>
 
-      <div className="mb-4">
-        <RichTextEditor
-          value={block.notes}
-          onChange={(notes) => update((b) => ({ ...b, notes }))}
-          placeholder="Réflexions, questionnements, décisions prises…"
-        />
-      </div>
+      {!collapsed && (
+        <>
+          <div className="mb-4">
+            <RichTextEditor
+              value={block.notes}
+              onChange={(notes) => update((b) => ({ ...b, notes }))}
+              placeholder="Réflexions, questionnements, décisions prises…"
+            />
+          </div>
 
-      {block.type === "platform-audience" && (
-        <PlatformAudienceBody block={block} update={update} />
+          {block.type === "platform-audience" && (
+            <PlatformAudienceBody block={block} update={update} />
+          )}
+          {block.type === "objectives" && (
+            <ObjectivesBody block={block} update={update} />
+          )}
+          {block.type === "assets" && (
+            <AssetsBody block={block} update={update} />
+          )}
+        </>
       )}
-      {block.type === "objectives" && (
-        <ObjectivesBody block={block} update={update} />
-      )}
-      {block.type === "assets" && <AssetsBody block={block} update={update} />}
     </Card>
   );
 }

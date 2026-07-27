@@ -1,4 +1,12 @@
-import type { StratDocument, TimelineItem } from "@/types/strat-builder";
+import type {
+  Asset,
+  AssetGroup,
+  Objective,
+  Platform,
+  StratBlock,
+  StratDocument,
+  TimelineItem,
+} from "@/types/strat-builder";
 
 const DAY_MS = 86_400_000;
 
@@ -46,8 +54,10 @@ export function collectOptions(document: StratDocument): AvailableOptions {
       }
     }
     if (block.type === "assets") {
-      for (const asset of block.assets) {
-        if (asset.name.trim()) assets.add(asset.name.trim());
+      for (const group of block.groups) {
+        for (const asset of group.assets) {
+          if (asset.name.trim()) assets.add(asset.name.trim());
+        }
       }
     }
   }
@@ -134,16 +144,107 @@ export function downloadStrategy(document: StratDocument): void {
   URL.revokeObjectURL(url);
 }
 
+// Formes "brutes" tolérantes utilisées pour l'import / la migration : les
+// champs récents ou legacy peuvent être absents.
+type RawAsset = Partial<Asset>;
+interface RawAssetGroup {
+  id?: string;
+  name?: string;
+  assets?: RawAsset[];
+}
+interface RawBlock {
+  id?: string;
+  type?: StratBlock["type"];
+  title?: string;
+  notes?: string;
+  collapsed?: boolean;
+  platforms?: unknown[];
+  objectives?: unknown[];
+  assets?: RawAsset[]; // legacy (avant les groupes d'adsets)
+  groups?: RawAssetGroup[];
+}
+interface RawDocument {
+  name?: string;
+  blocks?: RawBlock[];
+  timeline?: {
+    startDate?: string;
+    endDate?: string;
+    items?: Partial<TimelineItem>[];
+  };
+}
+
+function makeId(fallback?: string): string {
+  if (fallback) return fallback;
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function normalizeAsset(raw: RawAsset): Asset {
+  return {
+    id: makeId(raw.id),
+    name: raw.name ?? "",
+    assetType: raw.assetType ?? "",
+    duration: raw.duration ?? "",
+    recommended: raw.recommended ?? false,
+  };
+}
+
+function normalizeAssetGroups(block: RawBlock): AssetGroup[] {
+  // Format récent : groupes d'adsets.
+  if (Array.isArray(block.groups)) {
+    return block.groups.map((group) => ({
+      id: makeId(group.id),
+      name: group.name ?? "",
+      assets: (group.assets ?? []).map(normalizeAsset),
+    }));
+  }
+  // Format legacy : liste d'assets à plat → un seul groupe.
+  if (Array.isArray(block.assets)) {
+    return [
+      { id: makeId(), name: "", assets: block.assets.map(normalizeAsset) },
+    ];
+  }
+  return [{ id: makeId(), name: "", assets: [] }];
+}
+
+function normalizeBlock(raw: RawBlock): StratBlock {
+  const base = {
+    id: makeId(raw.id),
+    title: raw.title ?? "",
+    notes: raw.notes ?? "",
+    collapsed: raw.collapsed ?? false,
+  };
+  if (raw.type === "objectives") {
+    return {
+      ...base,
+      type: "objectives",
+      objectives: (raw.objectives ?? []) as Objective[],
+    };
+  }
+  if (raw.type === "assets") {
+    return { ...base, type: "assets", groups: normalizeAssetGroups(raw) };
+  }
+  // défaut : plateformes / audiences
+  return {
+    ...base,
+    type: "platform-audience",
+    platforms: (raw.platforms ?? []) as Platform[],
+  };
+}
+
 /**
- * Normalise un document importé : garantit la présence des champs récents
- * (smartbidding, budgets par audience) pour la rétrocompatibilité.
+ * Normalise un document importé / persisté : garantit la présence des champs
+ * récents (collapsed, groupes d'assets, smartbidding, description de ligne…)
+ * pour la rétrocompatibilité.
  */
-function normalizeDocument(raw: StratDocument): StratDocument {
-  const rawItems = (raw.timeline?.items ?? []) as Partial<TimelineItem>[];
-  const items: TimelineItem[] = rawItems.map(
+export function normalizeDocument(raw: RawDocument): StratDocument {
+  const items: TimelineItem[] = (raw.timeline?.items ?? []).map(
     (item) =>
       ({
         ...item,
+        description: item.description ?? "",
         platforms: item.platforms ?? [],
         audiences: item.audiences ?? [],
         assets: item.assets ?? [],
@@ -154,7 +255,7 @@ function normalizeDocument(raw: StratDocument): StratDocument {
 
   return {
     name: raw.name ?? "",
-    blocks: raw.blocks ?? [],
+    blocks: (raw.blocks ?? []).map(normalizeBlock),
     timeline: {
       startDate: raw.timeline?.startDate ?? new Date().toISOString().slice(0, 10),
       endDate: raw.timeline?.endDate ?? new Date().toISOString().slice(0, 10),
@@ -165,7 +266,7 @@ function normalizeDocument(raw: StratDocument): StratDocument {
 
 /** Parse et valide le contenu d'un fichier de stratégie importé. */
 export function parseStrategyFile(text: string): StratDocument {
-  const parsed = JSON.parse(text) as StratDocument;
+  const parsed = JSON.parse(text) as RawDocument;
   if (
     !parsed ||
     typeof parsed !== "object" ||

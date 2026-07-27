@@ -81,6 +81,8 @@ interface BaseBlock {
   title: string;
   /** Notes libres au format HTML (éditeur riche). */
   notes: string;
+  /** Bloc replié (corps masqué) pour gagner de la place. */
+  collapsed: boolean;
 }
 
 // Plateformes / Audiences
@@ -130,9 +132,20 @@ export interface Asset {
   recommended: boolean;
 }
 
+/**
+ * Groupe de créas correspondant à un adset / ciblage dédié
+ * (ex. "Creator", "Brand"). Permet d'organiser les assets en blocs distincts
+ * et d'assigner chaque créa à son adset.
+ */
+export interface AssetGroup {
+  id: string;
+  name: string;
+  assets: Asset[];
+}
+
 export interface AssetsBlock extends BaseBlock {
   type: "assets";
-  assets: Asset[];
+  groups: AssetGroup[];
 }
 
 export type StratBlock =
@@ -145,6 +158,8 @@ export type StratBlock =
 export interface TimelineItem {
   id: string;
   label: string;
+  /** Sous-titre / mini-description de la ligne. */
+  description: string;
   startDate: string; // ISO yyyy-mm-dd
   endDate: string; // ISO yyyy-mm-dd
   platforms: string[];

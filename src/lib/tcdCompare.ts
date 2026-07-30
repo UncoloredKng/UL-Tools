@@ -79,7 +79,8 @@ export function compareTcd(
   referenceText: string,
   referenceTable: ExcelTable | null,
   currentText: string,
-  currentTable: ExcelTable | null
+  currentTable: ExcelTable | null,
+  selectedKpiKeys: string[] = []
 ): TcdComparisonResult {
   const referenceParsed = parseTcdData(referenceText, referenceTable);
   const currentParsed = parseTcdData(currentText, currentTable);
@@ -152,8 +153,13 @@ export function compareTcd(
     return a.label.localeCompare(b.label, "fr");
   });
 
+  const filteredComparisons =
+    selectedKpiKeys.length === 0
+      ? comparisons
+      : comparisons.filter((item) => selectedKpiKeys.includes(item.key));
+
   return {
-    comparisons,
+    comparisons: filteredComparisons,
     referenceMetricCount: referenceParsed.metrics.length,
     currentMetricCount: currentParsed.metrics.length,
     matchedCount: comparisons.filter((item) => item.status === "matched").length,
@@ -197,7 +203,10 @@ export interface WeekTcdSource {
 /**
  * Analyse la tendance multi-semaines d'un KPI sur l'ensemble des snapshots disponibles.
  */
-export function analyzeMetricTrends(weeks: WeekTcdSource[]): MetricTrendAnalysis[] {
+export function analyzeMetricTrends(
+  weeks: WeekTcdSource[],
+  selectedKpiKeys: string[] = []
+): MetricTrendAnalysis[] {
   if (weeks.length < 2) return [];
 
   const parsedWeeks = weeks.map((week) => ({
@@ -248,7 +257,9 @@ export function analyzeMetricTrends(weeks: WeekTcdSource[]): MetricTrendAnalysis
     });
   }
 
-  return analyses.sort((a, b) => a.label.localeCompare(b.label, "fr"));
+  const sorted = analyses.sort((a, b) => a.label.localeCompare(b.label, "fr"));
+  if (selectedKpiKeys.length === 0) return sorted;
+  return sorted.filter((item) => selectedKpiKeys.includes(item.key));
 }
 
 export function formatEvolution(value: number | null, isPercent: boolean): string {

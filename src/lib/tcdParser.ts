@@ -3,19 +3,44 @@ import type { ExcelTable } from "@/types/prompt-builder";
 export interface TcdMetric {
   /** Clé normalisée pour le rapprochement inter-semaines */
   key: string;
-  /** Libellé affiché (première occurrence rencontrée) */
+  /** Libellé affiché (en-tête de colonne tel que collé) */
   label: string;
   value: number | null;
   rawValue: string;
   isPercent: boolean;
+  columnIndex: number;
 }
 
 export interface ParsedTcd {
   metrics: TcdMetric[];
+  /** En-têtes détectés dans le collage, dans l'ordre des colonnes */
+  headerLabels: string[];
   warnings: string[];
 }
 
+interface ExpandedGrid {
+  grid: string[][];
+  bold: boolean[][];
+}
+
 const EMPTY_VALUE_MARKERS = new Set(["", "-", "—", "–", "n/a", "na", "nd", "null"]);
+
+/** Libellés de dimension (1ʳᵉ colonne), jamais des KPI. */
+const DIMENSION_HEADER_HINTS = [
+  "segment",
+  "format",
+  "plateforme",
+  "campagne",
+  "line item",
+  "nom",
+  "libelle",
+  "media",
+  "dimension",
+  "row labels",
+  "libelles de lignes",
+];
+
+const VALUE_ROW_HINTS = ["total", "global", "totaux", "ensemble"];
 
 /**
  * Normalise un libellé KPI pour le rapprochement entre semaines
@@ -80,109 +105,211 @@ function parseTextGrid(text: string): string[][] {
     .filter((row) => row.some((cell) => cell.length > 0));
 }
 
-function isLikelyLabel(cell: string): boolean {
-  const { value } = parseNumericCell(cell);
-  if (value !== null) return false;
-  return cell.trim().length > 0;
+function isDimensionHeader(cell: string): boolean {
+  const normalized = normalizeMetricLabel(cell);
+  if (!normalized) return false;
+  return DIMENSION_HEADER_HINTS.some((hint) => normalized.includes(hint));
 }
 
-function findTotalColumnIndex(headerRows: string[][]): number | null {
-  for (const row of headerRows) {
-    for (let col = 0; col < row.length; col++) {
-      const normalized = normalizeMetricLabel(row[col] ?? "");
-      if (normalized.includes("total") || normalized === "global") {
-        return col;
-      }
+/**
+ * En-tête KPI : tout libellé textuel collé en colonne (hors dimensions),
+ * sans liste prédéfinie — l'ordre et les libellés viennent du TCD utilisateur.
+ */
+function isKpiHeaderCell(cell: string, options?: { allowBold?: boolean }): boolean {
+  const trimmed = cell.trim();
+  if (!trimmed || trimmed.length > 64) return false;
+  if (isDimensionHeader(trimmed)) return false;
+
+  const { value } = parseNumericCell(trimmed);
+  if (value !== null && !options?.allowBold) return false;
+
+  return true;
+}
+
+function isDimensionColumn(
+  grid: string[][],
+  headerRowIndex: number,
+  boldGrid?: boolean[][]
+): boolean {
+  const headerFirst = grid[headerRowIndex]?.[0] ?? "";
+  if (!headerFirst.trim()) return true;
+  if (isDimensionHeader(headerFirst)) return true;
+
+  let textLabels = 0;
+  for (let row = headerRowIndex + 1; row < Math.min(headerRowIndex + 8, grid.length); row++) {
+    const cell = grid[row]?.[0] ?? "";
+    if (!cell.trim()) continue;
+    if (parseNumericCell(cell).value === null || boldGrid?.[row]?.[0]) {
+      textLabels++;
     }
   }
-  return null;
+
+  return textLabels >= 2;
+}
+
+function scoreHeaderRow(
+  row: string[],
+  startColumn: number,
+  boldRow?: boolean[]
+): number {
+  let score = 0;
+  for (let col = startColumn; col < row.length; col++) {
+    const cell = row[col] ?? "";
+    const isBold = boldRow?.[col] ?? false;
+    if (isKpiHeaderCell(cell, { allowBold: isBold })) {
+      score += isBold ? 2 : 1;
+    }
+  }
+  return score;
+}
+
+function findHeaderRowIndex(grid: string[][], boldGrid?: boolean[][]): number {
+  let bestIndex = 0;
+  let bestScore = 0;
+
+  for (let rowIndex = 0; rowIndex < Math.min(12, grid.length); rowIndex++) {
+    const startColumn =
+      rowIndex === 0 || isDimensionColumn(grid, rowIndex, boldGrid) ? 1 : 0;
+    const score = scoreHeaderRow(
+      grid[rowIndex] ?? [],
+      startColumn,
+      boldGrid?.[rowIndex]
+    );
+    if (score > bestScore) {
+      bestScore = score;
+      bestIndex = rowIndex;
+    }
+  }
+
+  return bestScore > 0 ? bestIndex : 0;
+}
+
+function rowHasNumericValues(row: string[], fromColumn: number): boolean {
+  for (let col = fromColumn; col < row.length; col++) {
+    if (parseNumericCell(row[col] ?? "").value !== null) return true;
+  }
+  return false;
+}
+
+function findValueRowIndex(
+  grid: string[][],
+  headerRowIndex: number,
+  startColumn: number
+): number {
+  for (let rowIndex = headerRowIndex + 1; rowIndex < grid.length; rowIndex++) {
+    const rowLabel = normalizeMetricLabel(grid[rowIndex]?.[0] ?? "");
+    if (VALUE_ROW_HINTS.some((hint) => rowLabel.includes(hint))) {
+      return rowIndex;
+    }
+  }
+
+  for (let rowIndex = grid.length - 1; rowIndex > headerRowIndex; rowIndex--) {
+    const row = grid[rowIndex] ?? [];
+    const rowLabel = normalizeMetricLabel(row[0] ?? "");
+    if (VALUE_ROW_HINTS.some((hint) => rowLabel.includes(hint))) {
+      return rowIndex;
+    }
+    if (rowHasNumericValues(row, startColumn)) {
+      return rowIndex;
+    }
+  }
+
+  return headerRowIndex + 1 < grid.length ? headerRowIndex + 1 : -1;
 }
 
 function extractMetricsFromGrid(
   grid: string[][],
+  boldGrid: boolean[][] | undefined,
   warnings: string[]
 ): TcdMetric[] {
   if (grid.length === 0) return [];
 
-  const headerRows = grid.slice(0, Math.min(3, grid.length));
-  const totalColumnIndex = findTotalColumnIndex(headerRows);
+  const headerRowIndex = findHeaderRowIndex(grid, boldGrid);
+  const headerRow = grid[headerRowIndex] ?? [];
+  const startColumn = isDimensionColumn(grid, headerRowIndex, boldGrid) ? 1 : 0;
+  const valueRowIndex = findValueRowIndex(grid, headerRowIndex, startColumn);
+
+  if (valueRowIndex < 0) {
+    warnings.push(
+      "Impossible de trouver une ligne de valeurs dans le TCD collé (ligne « Total » ou dernière ligne numérique)."
+    );
+    return [];
+  }
+
+  const valueRow = grid[valueRowIndex] ?? [];
+  const valueRowLabel = normalizeMetricLabel(valueRow[0] ?? "");
+  const usedTotalRow = VALUE_ROW_HINTS.some((hint) => valueRowLabel.includes(hint));
+
+  if (!usedTotalRow && grid.length - headerRowIndex > 2) {
+    warnings.push(
+      "Ligne « Total » non détectée dans le collage : lecture sur la dernière ligne numérique disponible."
+    );
+  }
+
   const metrics: TcdMetric[] = [];
   const seenKeys = new Set<string>();
 
-  for (let rowIndex = 0; rowIndex < grid.length; rowIndex++) {
-    const row = grid[rowIndex];
-    if (row.length === 0) continue;
+  for (let col = startColumn; col < headerRow.length; col++) {
+    const label = headerRow[col]?.trim() ?? "";
+    const isBoldHeader = boldGrid?.[headerRowIndex]?.[col] ?? false;
+    if (!isKpiHeaderCell(label, { allowBold: isBoldHeader })) continue;
 
-    let labelIndex = -1;
-    for (let col = 0; col < row.length; col++) {
-      if (isLikelyLabel(row[col] ?? "")) {
-        labelIndex = col;
-        break;
-      }
-    }
-    if (labelIndex < 0) continue;
-
-    const label = row[labelIndex]?.trim() ?? "";
     const key = normalizeMetricLabel(label);
     if (!key || seenKeys.has(key)) continue;
 
-    let valueCell: string | null = null;
-    if (totalColumnIndex !== null && totalColumnIndex < row.length && totalColumnIndex !== labelIndex) {
-      valueCell = row[totalColumnIndex] ?? null;
-    }
-
-    if (!valueCell || !parseNumericCell(valueCell).value) {
-      for (let col = row.length - 1; col > labelIndex; col--) {
-        const candidate = row[col] ?? "";
-        if (parseNumericCell(candidate).value !== null) {
-          valueCell = candidate;
-          break;
-        }
-      }
-    }
-
-    if (!valueCell) continue;
-
-    const { value, isPercent } = parseNumericCell(valueCell);
-    if (value === null) continue;
+    const rawValue = valueRow[col]?.trim() ?? "";
+    const { value, isPercent } = parseNumericCell(rawValue);
+    if (value === null && !rawValue) continue;
 
     seenKeys.add(key);
-    metrics.push({ key, label, value, rawValue: valueCell.trim(), isPercent });
+    metrics.push({
+      key,
+      label,
+      value,
+      rawValue: rawValue || "—",
+      isPercent,
+      columnIndex: col,
+    });
   }
 
   if (metrics.length === 0) {
     warnings.push(
-      "Aucun KPI numérique détecté. Vérifiez que la première colonne contient les libellés et qu'une colonne de valeurs est présente."
+      "Aucun en-tête KPI détecté dans votre collage TCD. Vérifiez la ligne d'en-têtes de colonnes."
     );
   }
 
   return metrics;
 }
 
-function expandExcelTable(table: ExcelTable): string[][] {
+function expandExcelTable(table: ExcelTable): ExpandedGrid {
   const maxCols = table.rows.reduce(
     (max, row) => max + row.reduce((sum, cell) => sum + cell.colSpan, 0),
     0
   );
   const grid: string[][] = [];
+  const bold: boolean[][] = [];
   const occupied: boolean[][] = [];
 
   for (const row of table.rows) {
     let gridRow: string[] = [];
+    let boldRow: boolean[] = [];
     let colIndex = 0;
 
     while (occupied[grid.length]?.[colIndex]) {
       gridRow.push("");
+      boldRow.push(false);
       colIndex++;
     }
 
     for (const cell of row) {
       while (occupied[grid.length]?.[colIndex]) {
         gridRow.push("");
+        boldRow.push(false);
         colIndex++;
       }
 
       gridRow.push(cell.text);
+      boldRow.push(cell.bold);
       for (let r = 0; r < cell.rowSpan; r++) {
         for (let c = 0; c < cell.colSpan; c++) {
           if (r === 0 && c === 0) continue;
@@ -196,30 +323,69 @@ function expandExcelTable(table: ExcelTable): string[][] {
     while (gridRow.length < maxCols) {
       if (occupied[grid.length]?.[gridRow.length]) {
         gridRow.push("");
+        boldRow.push(false);
       } else {
         break;
       }
     }
 
     grid.push(gridRow);
+    bold.push(boldRow);
   }
 
-  return grid;
+  return { grid, bold };
+}
+
+function buildGridFromPaste(text: string, table: ExcelTable | null): ExpandedGrid {
+  if (table) {
+    return expandExcelTable(table);
+  }
+  return { grid: parseTextGrid(text), bold: [] };
 }
 
 /**
- * Extrait les KPI numériques d'un TCD collé depuis Excel.
- * Utilise la structure Excel si disponible, sinon le texte brut.
+ * Extrait les KPI à partir du collage TCD (champ Prompt Builder).
+ * Les en-têtes et leur ordre sont entièrement déduits des données collées.
  */
 export function parseTcdData(text: string, table: ExcelTable | null = null): ParsedTcd {
   const warnings: string[] = [];
 
   if (!text.trim() && !table) {
-    return { metrics: [], warnings: ["Aucune donnée TCD fournie."] };
+    return { metrics: [], headerLabels: [], warnings: ["Aucune donnée TCD fournie."] };
   }
 
-  const grid = table ? expandExcelTable(table) : parseTextGrid(text);
-  const metrics = extractMetricsFromGrid(grid, warnings);
+  const { grid, bold } = buildGridFromPaste(text, table);
+  const metrics = extractMetricsFromGrid(grid, bold.length > 0 ? bold : undefined, warnings);
+  const headerLabels = metrics.map((metric) => metric.label);
 
-  return { metrics, warnings };
+  return { metrics, headerLabels, warnings };
+}
+
+/**
+ * KPI disponibles pour le filtre UI : ordre du TCD actuel, puis complément depuis la semaine de référence.
+ */
+export function listAvailableKpiHeaders(
+  referenceText: string,
+  referenceTable: ExcelTable | null,
+  currentText: string,
+  currentTable: ExcelTable | null
+): { key: string; label: string }[] {
+  const current = parseTcdData(currentText, currentTable).metrics;
+  const reference = parseTcdData(referenceText, referenceTable).metrics;
+  const ordered: { key: string; label: string }[] = [];
+  const seen = new Set<string>();
+
+  for (const metric of current) {
+    if (seen.has(metric.key)) continue;
+    seen.add(metric.key);
+    ordered.push({ key: metric.key, label: metric.label });
+  }
+
+  for (const metric of reference) {
+    if (seen.has(metric.key)) continue;
+    seen.add(metric.key);
+    ordered.push({ key: metric.key, label: metric.label });
+  }
+
+  return ordered;
 }

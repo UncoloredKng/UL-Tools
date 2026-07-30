@@ -1,6 +1,13 @@
 "use client";
 
-import { CalendarRange, Plus, Trash2, Euro } from "lucide-react";
+import {
+  CalendarRange,
+  Plus,
+  Trash2,
+  Euro,
+  ChevronUp,
+  ChevronDown,
+} from "lucide-react";
 import { TIMELINE_COLORS, type TimelineItem } from "@/types/strat-builder";
 import { useStratStore } from "@/store/useStratStore";
 import { collectOptions, computeBar, weekTicks } from "@/lib/stratBuilder";
@@ -47,6 +54,9 @@ function ItemSummary({ item }: { item: TimelineItem }) {
           {item.label || "Sans intitulé"}
         </span>
       </div>
+      {item.description && (
+        <p className="text-xs leading-snug text-muted-soft">{item.description}</p>
+      )}
       {hasContent ? (
         <div className="flex flex-wrap gap-1">
           {item.platforms.map((p) => (
@@ -89,12 +99,17 @@ function ItemSummary({ item }: { item: TimelineItem }) {
 function ItemCard({
   item,
   options,
+  isFirst,
+  isLast,
 }: {
   item: TimelineItem;
   options: ReturnType<typeof collectOptions>;
+  isFirst: boolean;
+  isLast: boolean;
 }) {
   const updateItem = useStratStore((s) => s.updateTimelineItem);
   const removeItem = useStratStore((s) => s.removeTimelineItem);
+  const moveItem = useStratStore((s) => s.moveTimelineItem);
 
   function setAudienceBudget(audience: string, value: string) {
     updateItem(item.id, {
@@ -104,7 +119,27 @@ function ItemCard({
 
   return (
     <div className="rounded-xl border border-border-soft bg-surface-soft/60 p-3.5">
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <div className="flex shrink-0 flex-col">
+          <button
+            type="button"
+            disabled={isFirst}
+            onClick={() => moveItem(item.id, "up")}
+            aria-label="Monter la ligne"
+            className="flex h-4 w-5 items-center justify-center text-muted transition-colors hover:text-foreground disabled:opacity-30"
+          >
+            <ChevronUp className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            disabled={isLast}
+            onClick={() => moveItem(item.id, "down")}
+            aria-label="Descendre la ligne"
+            className="flex h-4 w-5 items-center justify-center text-muted transition-colors hover:text-foreground disabled:opacity-30"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </button>
+        </div>
         <span className={cn("h-3 w-3 shrink-0 rounded-full", item.color)} />
         <Input
           value={item.label}
@@ -148,6 +183,13 @@ function ItemCard({
           <Trash2 className="h-4 w-4" />
         </Button>
       </div>
+
+      <Input
+        value={item.description}
+        onChange={(e) => updateItem(item.id, { description: e.target.value })}
+        placeholder="Sous-titre / description courte de la ligne (option.)"
+        className="mb-3 h-9 text-sm"
+      />
 
       <div className="mb-3 flex flex-wrap items-center gap-1">
         {TIMELINE_COLORS.map((color) => (
@@ -343,8 +385,14 @@ export function Timeline() {
 
       {/* Configuration des lignes */}
       <div className="flex flex-col gap-3">
-        {timeline.items.map((item) => (
-          <ItemCard key={item.id} item={item} options={options} />
+        {timeline.items.map((item, index) => (
+          <ItemCard
+            key={item.id}
+            item={item}
+            options={options}
+            isFirst={index === 0}
+            isLast={index === timeline.items.length - 1}
+          />
         ))}
       </div>
 

@@ -77,7 +77,8 @@ export default function StratBuilderPage() {
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border-soft pt-6">
             <p className="text-xs text-muted-soft">
               Sauvegardez votre stratégie au format JSON pour la partager ou la
-              reprendre plus tard.
+              reprendre plus tard. Sur Chrome/Edge, liez un fichier pour
+              l&apos;auto-sauvegarde toutes les 20 min.
             </p>
             <StrategyIO />
           </div>

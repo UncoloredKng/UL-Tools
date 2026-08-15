@@ -75,6 +75,15 @@ export const BLOCK_META: Record<BlockType, BlockMeta> = {
   },
 };
 
+/** Commentaire d'équipe sur un bloc ou la timeline. */
+export interface StratComment {
+  id: string;
+  author: string;
+  text: string;
+  /** ISO datetime. */
+  createdAt: string;
+}
+
 interface BaseBlock {
   id: string;
   type: BlockType;
@@ -83,6 +92,8 @@ interface BaseBlock {
   notes: string;
   /** Bloc replié (corps masqué) pour gagner de la place. */
   collapsed: boolean;
+  /** Commentaires d'équipe (suggestions, questions…). */
+  comments: StratComment[];
 }
 
 // Plateformes / Audiences
@@ -181,6 +192,8 @@ export interface Timeline {
   startDate: string;
   endDate: string;
   items: TimelineItem[];
+  /** Commentaires d'équipe sur la timeline. */
+  comments: StratComment[];
 }
 
 /** Palette de couleurs disponibles pour les barres de timeline. */

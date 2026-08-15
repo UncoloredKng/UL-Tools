@@ -17,6 +17,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Field";
 import { Button } from "@/components/ui/Button";
 import { RichTextEditor } from "@/components/strat-builder/RichTextEditor";
+import { CommentSection } from "@/components/strat-builder/CommentSection";
 import { PlatformAudienceBody } from "@/components/strat-builder/blocks/PlatformAudienceBody";
 import { ObjectivesBody } from "@/components/strat-builder/blocks/ObjectivesBody";
 import { AssetsBody } from "@/components/strat-builder/blocks/AssetsBody";
@@ -37,6 +38,8 @@ export function StratBlockCard({ block, isFirst, isLast }: Props) {
   const updateBlock = useStratStore((s) => s.updateBlock);
   const removeBlock = useStratStore((s) => s.removeBlock);
   const moveBlock = useStratStore((s) => s.moveBlock);
+  const addBlockComment = useStratStore((s) => s.addBlockComment);
+  const removeBlockComment = useStratStore((s) => s.removeBlockComment);
 
   const Icon = BLOCK_ICON[block.type];
   const update = (recipe: (b: StratBlock) => StratBlock) =>
@@ -124,6 +127,12 @@ export function StratBlockCard({ block, isFirst, isLast }: Props) {
           )}
         </>
       )}
+
+      <CommentSection
+        comments={block.comments ?? []}
+        onAdd={(comment) => addBlockComment(block.id, comment)}
+        onRemove={(commentId) => removeBlockComment(block.id, commentId)}
+      />
     </Card>
   );
 }

@@ -4,6 +4,7 @@ import type {
   Objective,
   Platform,
   StratBlock,
+  StratComment,
   StratDocument,
   TimelineItem,
 } from "@/types/strat-builder";
@@ -158,6 +159,7 @@ interface RawBlock {
   title?: string;
   notes?: string;
   collapsed?: boolean;
+  comments?: StratComment[];
   platforms?: unknown[];
   objectives?: unknown[];
   assets?: RawAsset[]; // legacy (avant les groupes d'adsets)
@@ -170,6 +172,7 @@ interface RawDocument {
     startDate?: string;
     endDate?: string;
     items?: Partial<TimelineItem>[];
+    comments?: StratComment[];
   };
 }
 
@@ -209,12 +212,22 @@ function normalizeAssetGroups(block: RawBlock): AssetGroup[] {
   return [{ id: makeId(), name: "", assets: [] }];
 }
 
+function normalizeComment(raw: Partial<StratComment>): StratComment {
+  return {
+    id: makeId(raw.id),
+    author: raw.author ?? "Anonyme",
+    text: raw.text ?? "",
+    createdAt: raw.createdAt ?? new Date().toISOString(),
+  };
+}
+
 function normalizeBlock(raw: RawBlock): StratBlock {
   const base = {
     id: makeId(raw.id),
     title: raw.title ?? "",
     notes: raw.notes ?? "",
     collapsed: raw.collapsed ?? false,
+    comments: (raw.comments ?? []).map(normalizeComment),
   };
   if (raw.type === "objectives") {
     return {
@@ -260,6 +273,7 @@ export function normalizeDocument(raw: RawDocument): StratDocument {
       startDate: raw.timeline?.startDate ?? new Date().toISOString().slice(0, 10),
       endDate: raw.timeline?.endDate ?? new Date().toISOString().slice(0, 10),
       items,
+      comments: (raw.timeline?.comments ?? []).map(normalizeComment),
     },
   };
 }

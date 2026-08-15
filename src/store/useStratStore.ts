@@ -61,6 +61,7 @@ export function createBlock(type: BlockType): StratBlock {
     title: BLOCK_META[type].label,
     notes: "",
     collapsed: false,
+    comments: [],
   };
   switch (type) {
     case "platform-audience":
@@ -98,6 +99,7 @@ function createDocument(): StratDocument {
       startDate: start,
       endDate: addDays(start, 27),
       items: [],
+      comments: [],
     },
   };
 }
@@ -117,6 +119,13 @@ interface StratStoreState {
   removeTimelineItem: (itemId: string) => void;
   moveTimelineItem: (itemId: string, direction: "up" | "down") => void;
   updateTimelineItem: (itemId: string, patch: Partial<TimelineItem>) => void;
+  addBlockComment: (
+    blockId: string,
+    comment: { author: string; text: string }
+  ) => void;
+  removeBlockComment: (blockId: string, commentId: string) => void;
+  addTimelineComment: (comment: { author: string; text: string }) => void;
+  removeTimelineComment: (commentId: string) => void;
   /** Remplace tout le document (import JSON). */
   loadDocument: (document: StratDocument) => void;
   reset: () => void;
@@ -237,13 +246,85 @@ export const useStratStore = create<StratStoreState>()(
           },
         })),
 
+      addBlockComment: (blockId, comment) =>
+        set((state) => ({
+          document: {
+            ...state.document,
+            blocks: state.document.blocks.map((block) =>
+              block.id === blockId
+                ? {
+                    ...block,
+                    comments: [
+                      ...(block.comments ?? []),
+                      {
+                        id: createId(),
+                        author: comment.author.trim() || "Anonyme",
+                        text: comment.text.trim(),
+                        createdAt: new Date().toISOString(),
+                      },
+                    ],
+                  }
+                : block
+            ),
+          },
+        })),
+
+      removeBlockComment: (blockId, commentId) =>
+        set((state) => ({
+          document: {
+            ...state.document,
+            blocks: state.document.blocks.map((block) =>
+              block.id === blockId
+                ? {
+                    ...block,
+                    comments: (block.comments ?? []).filter(
+                      (c) => c.id !== commentId
+                    ),
+                  }
+                : block
+            ),
+          },
+        })),
+
+      addTimelineComment: (comment) =>
+        set((state) => ({
+          document: {
+            ...state.document,
+            timeline: {
+              ...state.document.timeline,
+              comments: [
+                ...(state.document.timeline.comments ?? []),
+                {
+                  id: createId(),
+                  author: comment.author.trim() || "Anonyme",
+                  text: comment.text.trim(),
+                  createdAt: new Date().toISOString(),
+                },
+              ],
+            },
+          },
+        })),
+
+      removeTimelineComment: (commentId) =>
+        set((state) => ({
+          document: {
+            ...state.document,
+            timeline: {
+              ...state.document.timeline,
+              comments: (state.document.timeline.comments ?? []).filter(
+                (c) => c.id !== commentId
+              ),
+            },
+          },
+        })),
+
       loadDocument: (document) => set({ document }),
 
       reset: () => set({ document: createDocument() }),
     }),
     {
       name: "ul-toolbox-strat-builder",
-      version: 3,
+      version: 4,
       migrate: (persisted) => {
         // Normalise l'état persisté vers le schéma courant (smartbidding,
         // groupes d'adsets, blocs repliables, sous-titres de lignes…).

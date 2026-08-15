@@ -1,9 +1,20 @@
 import type { ExcelTable } from "@/types/prompt-builder";
+import {
+  buildGridFromPaste,
+  findHeaderRowIndex,
+  isKpiHeaderCell,
+  normalizeMetricLabel,
+  parseNumericCell,
+  rowHasNumericValues,
+  type ExpandedGrid,
+} from "@/lib/tcdGrid";
+
+export type TcdGranularity = "global" | "platform" | "campaign" | "adset";
+
+export type HierarchyColumnType = "platform" | "campaign" | "adset" | "creative";
 
 export interface TcdMetric {
-  /** Clé normalisée pour le rapprochement inter-semaines */
   key: string;
-  /** Libellé affiché (en-tête de colonne tel que collé) */
   label: string;
   value: number | null;
   rawValue: string;
@@ -11,381 +22,535 @@ export interface TcdMetric {
   columnIndex: number;
 }
 
+export interface HierarchyColumn {
+  type: HierarchyColumnType;
+  columnIndex: number;
+  headerLabel: string;
+}
+
+export interface EntityPath {
+  platform: string;
+  campaign: string;
+  adset: string;
+  creative: string;
+}
+
+export interface TcdEntity {
+  key: string;
+  label: string;
+  pathLabel: string;
+  path: EntityPath;
+  metrics: TcdMetric[];
+}
+
 export interface ParsedTcd {
   metrics: TcdMetric[];
-  /** En-têtes détectés dans le collage, dans l'ordre des colonnes */
   headerLabels: string[];
+  hierarchyColumns: HierarchyColumn[];
+  entities: TcdEntity[];
+  availableGranularities: TcdGranularity[];
   warnings: string[];
 }
 
-interface ExpandedGrid {
-  grid: string[][];
-  bold: boolean[][];
-}
+const VALUE_ROW_HINTS = ["total", "global", "totaux", "ensemble", "all"];
 
-const EMPTY_VALUE_MARKERS = new Set(["", "-", "—", "–", "n/a", "na", "nd", "null"]);
+const HIERARCHY_HEADER_PATTERNS: Record<HierarchyColumnType, string[]> = {
+  platform: [
+    "plateforme",
+    "platform",
+    "publisher",
+    "reseau",
+    "network",
+    "media",
+    "source",
+    "canal",
+    "channel",
+  ],
+  campaign: ["campagne", "campaign", "campaign name", "nom campagne", "nom de campagne"],
+  adset: [
+    "adset",
+    "ad set",
+    "adset name",
+    "nom adset",
+    "jeu de pub",
+    "jeu pub",
+    "ensemble de pub",
+    "ensemble pub",
+    "ad group",
+    "adgroup",
+    "line item",
+    "set de pub",
+  ],
+  creative: [
+    "crea",
+    "creative",
+    "ad name",
+    "nom annonce",
+    "annonce",
+    "publicite",
+    "publicité",
+    "ad",
+    "asset",
+    "format crea",
+  ],
+};
 
-/** Libellés de dimension (1ʳᵉ colonne), jamais des KPI. */
-const DIMENSION_HEADER_HINTS = [
-  "segment",
-  "format",
-  "plateforme",
-  "campagne",
-  "line item",
-  "nom",
-  "libelle",
-  "media",
-  "dimension",
-  "row labels",
-  "libelles de lignes",
-];
+function classifyHierarchyHeader(header: string): HierarchyColumnType | null {
+  const normalized = normalizeMetricLabel(header);
+  if (!normalized) return null;
 
-const VALUE_ROW_HINTS = ["total", "global", "totaux", "ensemble"];
-
-/**
- * Normalise un libellé KPI pour le rapprochement entre semaines
- * (minuscules, sans accents, sans ponctuation superflue).
- */
-export function normalizeMetricLabel(label: string): string {
-  return label
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9%]+/g, " ")
-    .trim();
-}
-
-/**
- * Parse une cellule numérique issue d'Excel (formats FR/US, %, devises, espaces).
- */
-export function parseNumericCell(raw: string): { value: number | null; isPercent: boolean } {
-  let s = raw.trim().replace(/\u00a0/g, " ");
-  if (EMPTY_VALUE_MARKERS.has(s.toLowerCase())) {
-    return { value: null, isPercent: false };
-  }
-
-  const isPercent = s.includes("%");
-  s = s.replace(/[%€$£\s]/g, "");
-
-  if (s.includes(",") && s.includes(".")) {
-    if (s.lastIndexOf(",") > s.lastIndexOf(".")) {
-      s = s.replace(/\./g, "").replace(",", ".");
-    } else {
-      s = s.replace(/,/g, "");
-    }
-  } else if (s.includes(",")) {
-    const parts = s.split(",");
-    if (parts.length === 2 && parts[1].length === 3 && parts[0].length <= 3) {
-      s = parts.join("");
-    } else {
-      s = s.replace(",", ".");
+  for (const type of ["platform", "campaign", "adset", "creative"] as HierarchyColumnType[]) {
+    if (HIERARCHY_HEADER_PATTERNS[type].some((pattern) => normalized.includes(pattern))) {
+      return type;
     }
   }
 
-  const num = Number.parseFloat(s);
-  return { value: Number.isFinite(num) ? num : null, isPercent };
+  return null;
 }
 
-function splitTextRow(line: string): string[] {
-  if (line.includes("\t")) {
-    return line.split("\t").map((cell) => cell.trim());
-  }
-  return line
-    .split(/\s{2,}/)
-    .map((cell) => cell.trim())
-    .filter((cell) => cell.length > 0);
+function isTotalLabel(value: string): boolean {
+  const normalized = normalizeMetricLabel(value);
+  if (!normalized) return true;
+  return VALUE_ROW_HINTS.some((hint) => normalized === hint || normalized.includes(hint));
 }
 
-function parseTextGrid(text: string): string[][] {
-  return text
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n")
-    .map((line) => splitTextRow(line.trimEnd()))
-    .filter((row) => row.some((cell) => cell.length > 0));
-}
+function detectHierarchyColumns(
+  headerRow: string[],
+  kpiStartColumn: number
+): HierarchyColumn[] {
+  const columns: HierarchyColumn[] = [];
 
-function isDimensionHeader(cell: string): boolean {
-  const normalized = normalizeMetricLabel(cell);
-  if (!normalized) return false;
-  return DIMENSION_HEADER_HINTS.some((hint) => normalized.includes(hint));
-}
+  for (let col = 0; col < kpiStartColumn; col++) {
+    const header = headerRow[col]?.trim() ?? "";
+    if (!header) continue;
 
-/**
- * En-tête KPI : tout libellé textuel collé en colonne (hors dimensions),
- * sans liste prédéfinie — l'ordre et les libellés viennent du TCD utilisateur.
- */
-function isKpiHeaderCell(cell: string, options?: { allowBold?: boolean }): boolean {
-  const trimmed = cell.trim();
-  if (!trimmed || trimmed.length > 64) return false;
-  if (isDimensionHeader(trimmed)) return false;
-
-  const { value } = parseNumericCell(trimmed);
-  if (value !== null && !options?.allowBold) return false;
-
-  return true;
-}
-
-function isDimensionColumn(
-  grid: string[][],
-  headerRowIndex: number,
-  boldGrid?: boolean[][]
-): boolean {
-  const headerFirst = grid[headerRowIndex]?.[0] ?? "";
-  if (!headerFirst.trim()) return true;
-  if (isDimensionHeader(headerFirst)) return true;
-
-  let textLabels = 0;
-  for (let row = headerRowIndex + 1; row < Math.min(headerRowIndex + 8, grid.length); row++) {
-    const cell = grid[row]?.[0] ?? "";
-    if (!cell.trim()) continue;
-    if (parseNumericCell(cell).value === null || boldGrid?.[row]?.[0]) {
-      textLabels++;
+    const type = classifyHierarchyHeader(header);
+    if (type) {
+      columns.push({ type, columnIndex: col, headerLabel: header });
     }
   }
 
-  return textLabels >= 2;
+  if (columns.length > 0) return columns;
+
+  if (kpiStartColumn >= 1) {
+    const fallbackTypes: HierarchyColumnType[] = ["platform", "campaign", "adset", "creative"];
+    for (let col = 0; col < Math.min(kpiStartColumn, fallbackTypes.length); col++) {
+      columns.push({
+        type: fallbackTypes[col],
+        columnIndex: col,
+        headerLabel: headerRow[col]?.trim() || fallbackTypes[col],
+      });
+    }
+  }
+
+  return columns;
 }
 
-function scoreHeaderRow(
-  row: string[],
+function detectKpiColumns(
+  headerRow: string[],
   startColumn: number,
   boldRow?: boolean[]
-): number {
-  let score = 0;
-  for (let col = startColumn; col < row.length; col++) {
-    const cell = row[col] ?? "";
-    const isBold = boldRow?.[col] ?? false;
-    if (isKpiHeaderCell(cell, { allowBold: isBold })) {
-      score += isBold ? 2 : 1;
-    }
-  }
-  return score;
-}
-
-function findHeaderRowIndex(grid: string[][], boldGrid?: boolean[][]): number {
-  let bestIndex = 0;
-  let bestScore = 0;
-
-  for (let rowIndex = 0; rowIndex < Math.min(12, grid.length); rowIndex++) {
-    const startColumn =
-      rowIndex === 0 || isDimensionColumn(grid, rowIndex, boldGrid) ? 1 : 0;
-    const score = scoreHeaderRow(
-      grid[rowIndex] ?? [],
-      startColumn,
-      boldGrid?.[rowIndex]
-    );
-    if (score > bestScore) {
-      bestScore = score;
-      bestIndex = rowIndex;
-    }
-  }
-
-  return bestScore > 0 ? bestIndex : 0;
-}
-
-function rowHasNumericValues(row: string[], fromColumn: number): boolean {
-  for (let col = fromColumn; col < row.length; col++) {
-    if (parseNumericCell(row[col] ?? "").value !== null) return true;
-  }
-  return false;
-}
-
-function findValueRowIndex(
-  grid: string[][],
-  headerRowIndex: number,
-  startColumn: number
-): number {
-  for (let rowIndex = headerRowIndex + 1; rowIndex < grid.length; rowIndex++) {
-    const rowLabel = normalizeMetricLabel(grid[rowIndex]?.[0] ?? "");
-    if (VALUE_ROW_HINTS.some((hint) => rowLabel.includes(hint))) {
-      return rowIndex;
-    }
-  }
-
-  for (let rowIndex = grid.length - 1; rowIndex > headerRowIndex; rowIndex--) {
-    const row = grid[rowIndex] ?? [];
-    const rowLabel = normalizeMetricLabel(row[0] ?? "");
-    if (VALUE_ROW_HINTS.some((hint) => rowLabel.includes(hint))) {
-      return rowIndex;
-    }
-    if (rowHasNumericValues(row, startColumn)) {
-      return rowIndex;
-    }
-  }
-
-  return headerRowIndex + 1 < grid.length ? headerRowIndex + 1 : -1;
-}
-
-function extractMetricsFromGrid(
-  grid: string[][],
-  boldGrid: boolean[][] | undefined,
-  warnings: string[]
-): TcdMetric[] {
-  if (grid.length === 0) return [];
-
-  const headerRowIndex = findHeaderRowIndex(grid, boldGrid);
-  const headerRow = grid[headerRowIndex] ?? [];
-  const startColumn = isDimensionColumn(grid, headerRowIndex, boldGrid) ? 1 : 0;
-  const valueRowIndex = findValueRowIndex(grid, headerRowIndex, startColumn);
-
-  if (valueRowIndex < 0) {
-    warnings.push(
-      "Impossible de trouver une ligne de valeurs dans le TCD collé (ligne « Total » ou dernière ligne numérique)."
-    );
-    return [];
-  }
-
-  const valueRow = grid[valueRowIndex] ?? [];
-  const valueRowLabel = normalizeMetricLabel(valueRow[0] ?? "");
-  const usedTotalRow = VALUE_ROW_HINTS.some((hint) => valueRowLabel.includes(hint));
-
-  if (!usedTotalRow && grid.length - headerRowIndex > 2) {
-    warnings.push(
-      "Ligne « Total » non détectée dans le collage : lecture sur la dernière ligne numérique disponible."
-    );
-  }
-
-  const metrics: TcdMetric[] = [];
-  const seenKeys = new Set<string>();
+): { metrics: Omit<TcdMetric, "value" | "rawValue">[]; kpiStartColumn: number } {
+  const metrics: Omit<TcdMetric, "value" | "rawValue">[] = [];
+  let firstKpiColumn = startColumn;
 
   for (let col = startColumn; col < headerRow.length; col++) {
     const label = headerRow[col]?.trim() ?? "";
-    const isBoldHeader = boldGrid?.[headerRowIndex]?.[col] ?? false;
+    const isBoldHeader = boldRow?.[col] ?? false;
     if (!isKpiHeaderCell(label, { allowBold: isBoldHeader })) continue;
 
     const key = normalizeMetricLabel(label);
-    if (!key || seenKeys.has(key)) continue;
+    if (!key || metrics.some((metric) => metric.key === key)) continue;
 
-    const rawValue = valueRow[col]?.trim() ?? "";
-    const { value, isPercent } = parseNumericCell(rawValue);
-    if (value === null && !rawValue) continue;
-
-    seenKeys.add(key);
-    metrics.push({
-      key,
-      label,
-      value,
-      rawValue: rawValue || "—",
-      isPercent,
-      columnIndex: col,
-    });
+    if (metrics.length === 0) firstKpiColumn = col;
+    metrics.push({ key, label, isPercent: false, columnIndex: col });
   }
 
-  if (metrics.length === 0) {
-    warnings.push(
-      "Aucun en-tête KPI détecté dans votre collage TCD. Vérifiez la ligne d'en-têtes de colonnes."
+  return { metrics, kpiStartColumn: metrics.length > 0 ? firstKpiColumn : startColumn };
+}
+
+function readPathFromRow(
+  row: string[],
+  hierarchyColumns: HierarchyColumn[],
+  filled: EntityPath
+): EntityPath {
+  const path: EntityPath = { ...filled };
+
+  for (const column of hierarchyColumns) {
+    const value = row[column.columnIndex]?.trim() ?? "";
+    if (!value || isTotalLabel(value)) continue;
+
+    if (column.type === "platform") path.platform = value;
+    if (column.type === "campaign") path.campaign = value;
+    if (column.type === "adset") path.adset = value;
+    if (column.type === "creative") path.creative = value;
+  }
+
+  return path;
+}
+
+function pathAtGranularity(path: EntityPath, granularity: TcdGranularity): string {
+  if (granularity === "global") return "__global__";
+
+  const parts: string[] = [];
+  if (path.platform) parts.push(normalizeMetricLabel(path.platform));
+  if (granularity === "platform") return parts.join("/") || "__unknown_platform__";
+
+  if (path.campaign) parts.push(normalizeMetricLabel(path.campaign));
+  if (granularity === "campaign") return parts.join("/") || "__unknown_campaign__";
+
+  if (path.adset) parts.push(normalizeMetricLabel(path.adset));
+  return parts.join("/") || "__unknown_adset__";
+}
+
+function labelAtGranularity(path: EntityPath, granularity: TcdGranularity): string {
+  if (granularity === "global") return "Total campagne";
+  if (granularity === "platform") return path.platform || "Plateforme inconnue";
+  if (granularity === "campaign") return path.campaign || "Campagne inconnue";
+  return path.adset || "Adset inconnu";
+}
+
+function pathLabelAtGranularity(path: EntityPath, granularity: TcdGranularity): string {
+  const parts: string[] = [];
+  if (path.platform) parts.push(path.platform);
+  if (granularity === "platform") return parts.join(" › ");
+
+  if (path.campaign) parts.push(path.campaign);
+  if (granularity === "campaign") return parts.join(" › ");
+
+  if (path.adset) parts.push(path.adset);
+  return parts.join(" › ");
+}
+
+function rowMatchesGranularity(
+  path: EntityPath,
+  granularity: TcdGranularity,
+  isGlobalTotal: boolean
+): boolean {
+  if (granularity === "global") return isGlobalTotal;
+  if (isGlobalTotal) return false;
+  if (isTotalLabel(path.campaign) || isTotalLabel(path.adset)) return false;
+
+  if (granularity === "platform") {
+    return Boolean(path.platform) && !path.campaign && !path.adset && !path.creative;
+  }
+
+  if (granularity === "campaign") {
+    return (
+      Boolean(path.campaign) &&
+      (!path.adset || isTotalLabel(path.adset)) &&
+      (!path.creative || isTotalLabel(path.creative))
     );
   }
 
-  return metrics;
+  return Boolean(path.adset) && (!path.creative || isTotalLabel(path.creative));
 }
 
-function expandExcelTable(table: ExcelTable): ExpandedGrid {
-  const maxCols = table.rows.reduce(
-    (max, row) => max + row.reduce((sum, cell) => sum + cell.colSpan, 0),
-    0
+function isGlobalTotalRow(path: EntityPath, row: string[], kpiStartColumn: number): boolean {
+  const labels = [
+    path.platform,
+    path.campaign,
+    path.adset,
+    path.creative,
+    row.slice(0, kpiStartColumn).join(" "),
+  ];
+  return labels.some((label) => isTotalLabel(label));
+}
+
+function extractMetricsForRow(
+  row: string[],
+  kpiDefinitions: Omit<TcdMetric, "value" | "rawValue">[]
+): TcdMetric[] {
+  return kpiDefinitions.map((definition) => {
+    const rawValue = row[definition.columnIndex]?.trim() ?? "";
+    const { value, isPercent } = parseNumericCell(rawValue);
+    return {
+      ...definition,
+      value,
+      rawValue: rawValue || "—",
+      isPercent,
+    };
+  });
+}
+
+function subtotalScore(path: EntityPath): number {
+  let score = 0;
+  if (isTotalLabel(path.creative)) score += 3;
+  else if (!path.creative) score += 2;
+  if (isTotalLabel(path.adset)) score += 2;
+  else if (!path.adset) score += 1;
+  if (isTotalLabel(path.campaign)) score += 1;
+  return score;
+}
+
+function pickPreferredEntity(existing: TcdEntity, incoming: TcdEntity): TcdEntity {
+  const existingScore = subtotalScore(existing.path);
+  const incomingScore = subtotalScore(incoming.path);
+  if (incomingScore !== existingScore) {
+    return incomingScore > existingScore ? incoming : existing;
+  }
+
+  const existingFilled = existing.metrics.filter((metric) => metric.value !== null).length;
+  const incomingFilled = incoming.metrics.filter((metric) => metric.value !== null).length;
+  return incomingFilled > existingFilled ? incoming : existing;
+}
+
+function inferAvailableGranularities(hierarchyColumns: HierarchyColumn[]): TcdGranularity[] {
+  const levels: TcdGranularity[] = ["global"];
+  const types = new Set(hierarchyColumns.map((column) => column.type));
+
+  if (types.has("platform")) levels.push("platform");
+  if (types.has("campaign")) levels.push("campaign");
+  if (types.has("adset")) levels.push("adset");
+
+  if (levels.length === 1 && hierarchyColumns.length > 0) {
+    levels.push("campaign", "adset");
+  }
+
+  return levels;
+}
+
+function aggregateFromLeafRows(
+  rows: string[][],
+  headerRowIndex: number,
+  hierarchyColumns: HierarchyColumn[],
+  kpiDefinitions: Omit<TcdMetric, "value" | "rawValue">[],
+  kpiStartColumn: number,
+  granularity: TcdGranularity
+): TcdEntity[] {
+  const leafMap = new Map<string, TcdEntity>();
+  let filledPath: EntityPath = {
+    platform: "",
+    campaign: "",
+    adset: "",
+    creative: "",
+  };
+
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex] ?? [];
+    if (!rowHasNumericValues(row, kpiStartColumn)) continue;
+
+    filledPath = readPathFromRow(row, hierarchyColumns, filledPath);
+    if (isGlobalTotalRow(filledPath, row, kpiStartColumn)) continue;
+
+    const key = pathAtGranularity(filledPath, granularity);
+    if (key.includes("__unknown")) continue;
+
+    const metrics = extractMetricsForRow(row, kpiDefinitions);
+    const candidate: TcdEntity = {
+      key,
+      label: labelAtGranularity(filledPath, granularity),
+      pathLabel: pathLabelAtGranularity(filledPath, granularity),
+      path: { ...filledPath },
+      metrics,
+    };
+
+    const existing = leafMap.get(key);
+    leafMap.set(key, existing ? pickPreferredEntity(existing, candidate) : candidate);
+  }
+
+  return [...leafMap.values()].sort((a, b) => a.pathLabel.localeCompare(b.pathLabel, "fr"));
+}
+
+function parseEntitiesFromGrid(
+  grid: ExpandedGrid,
+  granularity: TcdGranularity,
+  warnings: string[]
+): {
+  entities: TcdEntity[];
+  hierarchyColumns: HierarchyColumn[];
+  kpiDefinitions: Omit<TcdMetric, "value" | "rawValue">[];
+} {
+  const { grid: rows, bold } = grid;
+  if (rows.length === 0) {
+    return { entities: [], hierarchyColumns: [], kpiDefinitions: [] };
+  }
+
+  const headerRowIndex = findHeaderRowIndex(rows, bold.length > 0 ? bold : undefined);
+  const headerRow = rows[headerRowIndex] ?? [];
+  const dimensionStart = headerRowIndex === 0 ? 1 : 0;
+  const { metrics: kpiDefinitions, kpiStartColumn } = detectKpiColumns(
+    headerRow,
+    dimensionStart,
+    bold[headerRowIndex]
   );
-  const grid: string[][] = [];
-  const bold: boolean[][] = [];
-  const occupied: boolean[][] = [];
 
-  for (const row of table.rows) {
-    let gridRow: string[] = [];
-    let boldRow: boolean[] = [];
-    let colIndex = 0;
-
-    while (occupied[grid.length]?.[colIndex]) {
-      gridRow.push("");
-      boldRow.push(false);
-      colIndex++;
-    }
-
-    for (const cell of row) {
-      while (occupied[grid.length]?.[colIndex]) {
-        gridRow.push("");
-        boldRow.push(false);
-        colIndex++;
-      }
-
-      gridRow.push(cell.text);
-      boldRow.push(cell.bold);
-      for (let r = 0; r < cell.rowSpan; r++) {
-        for (let c = 0; c < cell.colSpan; c++) {
-          if (r === 0 && c === 0) continue;
-          if (!occupied[grid.length + r]) occupied[grid.length + r] = [];
-          occupied[grid.length + r][colIndex + c] = true;
-        }
-      }
-      colIndex += cell.colSpan;
-    }
-
-    while (gridRow.length < maxCols) {
-      if (occupied[grid.length]?.[gridRow.length]) {
-        gridRow.push("");
-        boldRow.push(false);
-      } else {
-        break;
-      }
-    }
-
-    grid.push(gridRow);
-    bold.push(boldRow);
+  if (kpiDefinitions.length === 0) {
+    warnings.push(
+      "Aucun en-tête KPI détecté dans votre collage TCD. Vérifiez la ligne d'en-têtes de colonnes."
+    );
+    return { entities: [], hierarchyColumns: [], kpiDefinitions: [] };
   }
 
-  return { grid, bold };
-}
+  const hierarchyColumns = detectHierarchyColumns(headerRow, kpiStartColumn);
+  const entityMap = new Map<string, TcdEntity>();
+  let filledPath: EntityPath = {
+    platform: "",
+    campaign: "",
+    adset: "",
+    creative: "",
+  };
 
-function buildGridFromPaste(text: string, table: ExcelTable | null): ExpandedGrid {
-  if (table) {
-    return expandExcelTable(table);
+  for (let rowIndex = headerRowIndex + 1; rowIndex < rows.length; rowIndex++) {
+    const row = rows[rowIndex] ?? [];
+    if (!rowHasNumericValues(row, kpiStartColumn)) continue;
+
+    filledPath = readPathFromRow(row, hierarchyColumns, filledPath);
+    const isGlobalTotal = isGlobalTotalRow(filledPath, row, kpiStartColumn);
+    if (!rowMatchesGranularity(filledPath, granularity, isGlobalTotal)) continue;
+
+    const metrics = extractMetricsForRow(row, kpiDefinitions).filter(
+      (metric) => metric.value !== null || metric.rawValue !== "—"
+    );
+    if (metrics.length === 0) continue;
+
+    const key = pathAtGranularity(filledPath, granularity);
+    entityMap.set(key, {
+      key,
+      label: labelAtGranularity(filledPath, granularity),
+      pathLabel: pathLabelAtGranularity(filledPath, granularity),
+      path: { ...filledPath },
+      metrics,
+    });
   }
-  return { grid: parseTextGrid(text), bold: [] };
+
+  if (entityMap.size === 0 && granularity !== "global") {
+    warnings.push(
+      `Aucune ligne explicite au niveau « ${granularity} » : lecture depuis les lignes les plus détaillées du TCD.`
+    );
+    return {
+      entities: aggregateFromLeafRows(
+        rows,
+        headerRowIndex,
+        hierarchyColumns,
+        kpiDefinitions,
+        kpiStartColumn,
+        granularity
+      ),
+      hierarchyColumns,
+      kpiDefinitions,
+    };
+  }
+
+  return {
+    entities: [...entityMap.values()].sort((a, b) => a.pathLabel.localeCompare(b.pathLabel, "fr")),
+    hierarchyColumns,
+    kpiDefinitions,
+  };
 }
 
-/**
- * Extrait les KPI à partir du collage TCD (champ Prompt Builder).
- * Les en-têtes et leur ordre sont entièrement déduits des données collées.
- */
-export function parseTcdData(text: string, table: ExcelTable | null = null): ParsedTcd {
+export function parseTcdData(
+  text: string,
+  table: ExcelTable | null = null,
+  granularity: TcdGranularity = "global"
+): ParsedTcd {
   const warnings: string[] = [];
 
   if (!text.trim() && !table) {
-    return { metrics: [], headerLabels: [], warnings: ["Aucune donnée TCD fournie."] };
+    return {
+      metrics: [],
+      headerLabels: [],
+      hierarchyColumns: [],
+      entities: [],
+      availableGranularities: ["global"],
+      warnings: ["Aucune donnée TCD fournie."],
+    };
   }
 
-  const { grid, bold } = buildGridFromPaste(text, table);
-  const metrics = extractMetricsFromGrid(grid, bold.length > 0 ? bold : undefined, warnings);
-  const headerLabels = metrics.map((metric) => metric.label);
+  const grid = buildGridFromPaste(text, table);
+  const { entities, hierarchyColumns, kpiDefinitions } = parseEntitiesFromGrid(
+    grid,
+    granularity,
+    warnings
+  );
 
-  return { metrics, headerLabels, warnings };
+  const globalEntity =
+    entities.find((entity) => entity.key === "__global__") ??
+    (granularity === "global" ? entities[0] : undefined);
+
+  if (hierarchyColumns.length === 0) {
+    warnings.push(
+      "Colonnes hiérarchiques BM non détectées dans le collage : seule la vue globale est disponible."
+    );
+  }
+
+  return {
+    metrics: globalEntity?.metrics ?? [],
+    headerLabels: kpiDefinitions.map((definition) => definition.label),
+    hierarchyColumns,
+    entities,
+    availableGranularities: inferAvailableGranularities(hierarchyColumns),
+    warnings,
+  };
 }
 
-/**
- * KPI disponibles pour le filtre UI : ordre du TCD actuel, puis complément depuis la semaine de référence.
- */
 export function listAvailableKpiHeaders(
   referenceText: string,
   referenceTable: ExcelTable | null,
   currentText: string,
-  currentTable: ExcelTable | null
+  currentTable: ExcelTable | null,
+  granularity: TcdGranularity = "global"
 ): { key: string; label: string }[] {
-  const current = parseTcdData(currentText, currentTable).metrics;
-  const reference = parseTcdData(referenceText, referenceTable).metrics;
+  const current = parseTcdData(currentText, currentTable, granularity);
+  const reference = parseTcdData(referenceText, referenceTable, granularity);
   const ordered: { key: string; label: string }[] = [];
   const seen = new Set<string>();
 
-  for (const metric of current) {
-    if (seen.has(metric.key)) continue;
-    seen.add(metric.key);
-    ordered.push({ key: metric.key, label: metric.label });
-  }
+  const collect = (entities: TcdEntity[]) => {
+    for (const entity of entities) {
+      for (const metric of entity.metrics) {
+        if (seen.has(metric.key)) continue;
+        seen.add(metric.key);
+        ordered.push({ key: metric.key, label: metric.label });
+      }
+    }
+  };
 
-  for (const metric of reference) {
-    if (seen.has(metric.key)) continue;
-    seen.add(metric.key);
-    ordered.push({ key: metric.key, label: metric.label });
-  }
+  collect(current.entities);
+  collect(reference.entities);
 
   return ordered;
 }
+
+export function listAvailableEntities(
+  referenceText: string,
+  referenceTable: ExcelTable | null,
+  currentText: string,
+  currentTable: ExcelTable | null,
+  granularity: TcdGranularity
+): { key: string; label: string; pathLabel: string }[] {
+  const current = parseTcdData(currentText, currentTable, granularity);
+  const reference = parseTcdData(referenceText, referenceTable, granularity);
+  const byKey = new Map<string, { key: string; label: string; pathLabel: string }>();
+
+  for (const entity of [...reference.entities, ...current.entities]) {
+    if (!byKey.has(entity.key)) {
+      byKey.set(entity.key, {
+        key: entity.key,
+        label: entity.label,
+        pathLabel: entity.pathLabel,
+      });
+    }
+  }
+
+  return [...byKey.values()].sort((a, b) => a.pathLabel.localeCompare(b.pathLabel, "fr"));
+}
+
+export function listAvailableGranularities(
+  referenceText: string,
+  referenceTable: ExcelTable | null,
+  currentText: string,
+  currentTable: ExcelTable | null
+): TcdGranularity[] {
+  const current = parseTcdData(currentText, currentTable, "global");
+  const reference = parseTcdData(referenceText, referenceTable, "global");
+  const levels = new Set<TcdGranularity>();
+
+  for (const level of [...current.availableGranularities, ...reference.availableGranularities]) {
+    levels.add(level);
+  }
+
+  return [...levels];
+}
+
+export { normalizeMetricLabel, parseNumericCell };

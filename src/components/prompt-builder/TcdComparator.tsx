@@ -12,16 +12,23 @@ import {
 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Select } from "@/components/ui/Select";
+import { ToggleGroup } from "@/components/ui/ToggleGroup";
 import { cn } from "@/lib/cn";
-import { listAvailableKpiHeaders } from "@/lib/tcdParser";
 import {
+  getGranularityLabel,
   analyzeMetricTrends,
   compareTcd,
   formatEvolution,
   formatMetricValue,
-  type MetricComparison,
+  type EntityMetricComparison,
   type MetricTrend,
 } from "@/lib/tcdCompare";
+import {
+  listAvailableEntities,
+  listAvailableGranularities,
+  listAvailableKpiHeaders,
+  type TcdGranularity,
+} from "@/lib/tcdParser";
 import type { HistoryEntry, WeekDraft } from "@/types/prompt-builder";
 
 interface TcdComparatorProps {
@@ -36,6 +43,13 @@ const TREND_LABELS: Record<MetricTrend, string> = {
   volatile: "Variable",
   insufficient: "Données insuffisantes",
 };
+
+const GRANULARITY_OPTIONS: { value: TcdGranularity; label: string }[] = [
+  { value: "global", label: "Global" },
+  { value: "platform", label: "Plateforme" },
+  { value: "campaign", label: "Campagne" },
+  { value: "adset", label: "Adset" },
+];
 
 function TrendBadge({ trend }: { trend: MetricTrend }) {
   const config: Record<MetricTrend, { icon: typeof TrendingUp; className: string }> = {
@@ -61,7 +75,7 @@ function TrendBadge({ trend }: { trend: MetricTrend }) {
   );
 }
 
-function EvolutionCell({ comparison }: { comparison: MetricComparison }) {
+function EvolutionCell({ comparison }: { comparison: EntityMetricComparison }) {
   if (comparison.status !== "matched") {
     return <span className="text-xs text-muted-soft">—</span>;
   }
@@ -99,11 +113,23 @@ function EvolutionCell({ comparison }: { comparison: MetricComparison }) {
 export function TcdComparator({ draft, history }: TcdComparatorProps) {
   const [referenceId, setReferenceId] = useState<string>(() => history[0]?.id ?? "");
   const [showTrends, setShowTrends] = useState(true);
+  const [granularity, setGranularity] = useState<TcdGranularity>("global");
   const [selectedKpiKeys, setSelectedKpiKeys] = useState<string[]>([]);
+  const [selectedEntityKeys, setSelectedEntityKeys] = useState<string[]>([]);
 
   const effectiveReferenceId =
     history.find((entry) => entry.id === referenceId)?.id ?? history[0]?.id ?? "";
   const referenceEntry = history.find((entry) => entry.id === effectiveReferenceId) ?? null;
+
+  const availableGranularities = useMemo(() => {
+    if (!referenceEntry || !draft.tcdData.trim()) return ["global"] as TcdGranularity[];
+    return listAvailableGranularities(
+      referenceEntry.tcdData,
+      referenceEntry.tcdTable ?? null,
+      draft.tcdData,
+      draft.tcdTable
+    );
+  }, [referenceEntry, draft.tcdData, draft.tcdTable]);
 
   const availableKpis = useMemo(() => {
     if (!referenceEntry || !draft.tcdData.trim()) return [];
@@ -111,9 +137,21 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
       referenceEntry.tcdData,
       referenceEntry.tcdTable ?? null,
       draft.tcdData,
-      draft.tcdTable
+      draft.tcdTable,
+      granularity
     );
-  }, [referenceEntry, draft.tcdData, draft.tcdTable]);
+  }, [referenceEntry, draft.tcdData, draft.tcdTable, granularity]);
+
+  const availableEntities = useMemo(() => {
+    if (!referenceEntry || !draft.tcdData.trim() || granularity === "global") return [];
+    return listAvailableEntities(
+      referenceEntry.tcdData,
+      referenceEntry.tcdTable ?? null,
+      draft.tcdData,
+      draft.tcdTable,
+      granularity
+    );
+  }, [referenceEntry, draft.tcdData, draft.tcdTable, granularity]);
 
   const comparison = useMemo(() => {
     if (!referenceEntry || !draft.tcdData.trim()) return null;
@@ -122,9 +160,18 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
       referenceEntry.tcdTable ?? null,
       draft.tcdData,
       draft.tcdTable,
-      selectedKpiKeys
+      granularity,
+      selectedKpiKeys,
+      selectedEntityKeys
     );
-  }, [referenceEntry, draft.tcdData, draft.tcdTable, selectedKpiKeys]);
+  }, [
+    referenceEntry,
+    draft.tcdData,
+    draft.tcdTable,
+    granularity,
+    selectedKpiKeys,
+    selectedEntityKeys,
+  ]);
 
   const trendAnalysis = useMemo(() => {
     if (!showTrends || history.length < 2 || !draft.tcdData.trim()) return [];
@@ -143,29 +190,67 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
       },
     ];
 
-    return analyzeMetricTrends(weeks, selectedKpiKeys);
-  }, [showTrends, history, draft.tcdData, draft.tcdTable, draft.weekLabel, selectedKpiKeys]);
+    return analyzeMetricTrends(
+      weeks,
+      granularity,
+      selectedKpiKeys,
+      selectedEntityKeys
+    );
+  }, [
+    showTrends,
+    history,
+    draft.tcdData,
+    draft.tcdTable,
+    draft.weekLabel,
+    granularity,
+    selectedKpiKeys,
+    selectedEntityKeys,
+  ]);
 
   function toggleKpiFilter(key: string) {
     setSelectedKpiKeys((current) => {
-      if (current.length === 0) {
-        return [key];
-      }
-      if (current.includes(key)) {
-        const next = current.filter((item) => item !== key);
-        return next;
-      }
+      if (current.length === 0) return [key];
+      if (current.includes(key)) return current.filter((item) => item !== key);
+      return [...current, key];
+    });
+  }
+
+  function toggleEntityFilter(key: string) {
+    setSelectedEntityKeys((current) => {
+      if (current.length === 0) return [key];
+      if (current.includes(key)) return current.filter((item) => item !== key);
       return [...current, key];
     });
   }
 
   const currentWeekLabel = draft.weekLabel.trim() || "Semaine en cours";
   const showingAllKpis = selectedKpiKeys.length === 0;
+  const showingAllEntities = selectedEntityKeys.length === 0;
+  const granularityOptions = GRANULARITY_OPTIONS.filter((option) =>
+    availableGranularities.includes(option.value)
+  );
+
+  useEffect(() => {
+    if (!availableGranularities.includes(granularity)) {
+      setGranularity(availableGranularities[0] ?? "global");
+    }
+  }, [availableGranularities, granularity]);
 
   useEffect(() => {
     const allowed = new Set(availableKpis.map((kpi) => kpi.key));
     setSelectedKpiKeys((current) => current.filter((key) => allowed.has(key)));
   }, [availableKpis]);
+
+  useEffect(() => {
+    const allowed = new Set(availableEntities.map((entity) => entity.key));
+    setSelectedEntityKeys((current) => current.filter((key) => allowed.has(key)));
+  }, [availableEntities]);
+
+  useEffect(() => {
+    if (granularity === "global") {
+      setSelectedEntityKeys([]);
+    }
+  }, [granularity]);
 
   return (
     <Card className="p-5 sm:p-6">
@@ -175,8 +260,7 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
           <div>
             <h2 className="text-base font-semibold text-foreground">Comparateur TCD</h2>
             <p className="text-xs text-muted">
-              Les KPI et leur ordre sont lus depuis votre collage TCD (semaine en cours et semaine
-              de référence).
+              Structure BM détectée depuis votre collage (Plateforme › Campagne › Adset › Créa).
             </p>
           </div>
         </div>
@@ -220,6 +304,63 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
               </div>
             </div>
           </div>
+
+          <div>
+            <label className="mb-2 block text-xs font-medium text-muted">
+              Niveau de comparaison
+            </label>
+            <ToggleGroup
+              options={granularityOptions}
+              value={granularity}
+              onChange={setGranularity}
+            />
+          </div>
+
+          {availableEntities.length > 0 && (
+            <div>
+              <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <label className="text-xs font-medium text-muted">
+                  {getGranularityLabel(granularity)}s à comparer
+                  <span className="ml-1 font-normal text-muted-soft">
+                    (aucune sélection = toutes)
+                  </span>
+                </label>
+                {!showingAllEntities && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedEntityKeys([])}
+                    className="cursor-pointer text-xs text-accent hover:underline"
+                  >
+                    Tout afficher
+                  </button>
+                )}
+              </div>
+              <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto">
+                {availableEntities.map((entity) => {
+                  const isActive =
+                    showingAllEntities || selectedEntityKeys.includes(entity.key);
+                  return (
+                    <button
+                      key={entity.key}
+                      type="button"
+                      title={entity.pathLabel}
+                      onClick={() => toggleEntityFilter(entity.key)}
+                      className={cn(
+                        "cursor-pointer rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
+                        isActive && !showingAllEntities
+                          ? "border-transparent bg-accent text-accent-foreground"
+                          : showingAllEntities
+                            ? "border-border-soft bg-surface-soft text-foreground hover:border-accent/50"
+                            : "border-border-soft text-muted hover:border-border hover:text-foreground"
+                      )}
+                    >
+                      {entity.pathLabel}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {availableKpis.length > 0 && (
             <div>
@@ -270,14 +411,19 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
             <>
               <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
                 <span className="rounded-full bg-surface-hover px-2 py-0.5">
+                  Niveau : {getGranularityLabel(comparison.granularity)}
+                </span>
+                <span className="rounded-full bg-surface-hover px-2 py-0.5">
+                  {comparison.entityCount} entité(s)
+                </span>
+                <span className="rounded-full bg-surface-hover px-2 py-0.5">
                   {comparison.matchedCount} KPI rapprochés
                 </span>
-                <span className="rounded-full bg-surface-hover px-2 py-0.5">
-                  {comparison.currentMetricCount} KPI détectés (actuel)
-                </span>
-                <span className="rounded-full bg-surface-hover px-2 py-0.5">
-                  {comparison.referenceMetricCount} KPI détectés (réf.)
-                </span>
+                {comparison.hierarchyColumns.length > 0 && (
+                  <span className="rounded-full bg-surface-hover px-2 py-0.5">
+                    Colonnes BM : {comparison.hierarchyColumns.join(", ")}
+                  </span>
+                )}
               </div>
 
               {comparison.warnings.length > 0 && (
@@ -290,14 +436,20 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
 
               {comparison.comparisons.length === 0 ? (
                 <p className="text-sm text-muted">
-                  Impossible de comparer les deux jeux de données. Vérifiez le format du TCD
-                  (en-têtes KPI en colonnes, ligne « Total » ou valeurs agrégées).
+                  Impossible de comparer les deux jeux de données à ce niveau. Vérifiez que votre
+                  TCD contient les colonnes Plateforme / Campagne / Adset et des lignes de
+                  sous-totaux ou des lignes détaillées.
                 </p>
               ) : (
                 <div className="overflow-x-auto rounded-xl border border-border-soft">
-                  <table className="w-full min-w-[640px] text-left text-sm">
+                  <table className="w-full min-w-[760px] text-left text-sm">
                     <thead>
                       <tr className="border-b border-border-soft bg-surface-soft text-xs text-muted">
+                        {granularity !== "global" && (
+                          <th className="px-3 py-2.5 font-medium">
+                            {getGranularityLabel(granularity)}
+                          </th>
+                        )}
                         <th className="px-3 py-2.5 font-medium">KPI</th>
                         <th className="px-3 py-2.5 font-medium">
                           {referenceEntry?.weekLabel ?? "Réf."}
@@ -310,9 +462,17 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
                     <tbody>
                       {comparison.comparisons.map((row) => (
                         <tr
-                          key={row.key}
+                          key={`${row.entityKey}-${row.key}`}
                           className="border-b border-border-soft/60 last:border-0"
                         >
+                          {granularity !== "global" && (
+                            <td className="px-3 py-2.5 text-foreground">
+                              <div className="font-medium">{row.entityLabel}</div>
+                              {row.entityPathLabel !== row.entityLabel && (
+                                <div className="text-xs text-muted-soft">{row.entityPathLabel}</div>
+                              )}
+                            </td>
+                          )}
                           <td className="px-3 py-2.5 font-medium text-foreground">{row.label}</td>
                           <td className="px-3 py-2.5 tabular-nums text-muted">
                             {formatMetricValue(
@@ -363,9 +523,14 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
 
               {showTrends && trendAnalysis.length > 0 && (
                 <div className="overflow-x-auto rounded-xl border border-border-soft">
-                  <table className="w-full min-w-[720px] text-left text-sm">
+                  <table className="w-full min-w-[820px] text-left text-sm">
                     <thead>
                       <tr className="border-b border-border-soft bg-surface-soft text-xs text-muted">
+                        {granularity !== "global" && (
+                          <th className="px-3 py-2.5 font-medium">
+                            {getGranularityLabel(granularity)}
+                          </th>
+                        )}
                         <th className="px-3 py-2.5 font-medium">KPI</th>
                         {[...history]
                           .reverse()
@@ -381,13 +546,21 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
                     <tbody>
                       {trendAnalysis.map((row) => (
                         <tr
-                          key={row.key}
+                          key={`${row.entityKey}-${row.key}`}
                           className="border-b border-border-soft/60 last:border-0"
                         >
+                          {granularity !== "global" && (
+                            <td className="px-3 py-2.5 text-foreground">
+                              <div className="font-medium">{row.entityLabel}</div>
+                              {row.entityPathLabel !== row.entityLabel && (
+                                <div className="text-xs text-muted-soft">{row.entityPathLabel}</div>
+                              )}
+                            </td>
+                          )}
                           <td className="px-3 py-2.5 font-medium text-foreground">{row.label}</td>
                           {row.values.map((value, index) => (
                             <td
-                              key={`${row.key}-${value.weekLabel}-${index}`}
+                              key={`${row.entityKey}-${row.key}-${value.weekLabel}-${index}`}
                               className="px-3 py-2.5 tabular-nums text-muted"
                             >
                               {formatMetricValue(value.value, value.rawValue, row.isPercent)}
@@ -405,7 +578,7 @@ export function TcdComparator({ draft, history }: TcdComparatorProps) {
 
               {showTrends && trendAnalysis.length === 0 && (
                 <p className="text-sm text-muted">
-                  Pas assez de semaines comparables pour détecter des tendances.
+                  Pas assez de semaines comparables pour détecter des tendances à ce niveau.
                 </p>
               )}
             </div>

@@ -1,5 +1,9 @@
-import type { TcdMetric } from "@/lib/tcdParser";
-import { parseTcdData } from "@/lib/tcdParser";
+import {
+  parseTcdData,
+  type TcdEntity,
+  type TcdGranularity,
+  type TcdMetric,
+} from "@/lib/tcdParser";
 import type { ExcelTable } from "@/types/prompt-builder";
 
 export type MetricTrend = "up" | "down" | "stable" | "volatile" | "insufficient";
@@ -12,42 +16,59 @@ export interface MetricComparison {
   currentValue: number | null;
   currentRaw: string;
   isPercent: boolean;
-  /** Variation en points de pourcentage absolus (ex : 2,5 % → 3,0 % = +0,5 pt) */
   deltaPoints: number | null;
-  /** Variation relative en % (ex : 100 → 120 = +20 %) */
   evolutionPercent: number | null;
   status: "matched" | "new" | "removed";
 }
 
+export interface EntityMetricComparison extends MetricComparison {
+  entityKey: string;
+  entityLabel: string;
+  entityPathLabel: string;
+}
+
 export interface TcdComparisonResult {
-  comparisons: MetricComparison[];
+  granularity: TcdGranularity;
+  comparisons: EntityMetricComparison[];
+  entityCount: number;
   referenceMetricCount: number;
   currentMetricCount: number;
   matchedCount: number;
+  hierarchyColumns: string[];
   warnings: string[];
-}
-
-export interface WeekSnapshot {
-  id: string;
-  weekLabel: string;
-  validatedAt?: number;
-  isCurrent?: boolean;
 }
 
 export interface MetricTrendAnalysis {
   key: string;
   label: string;
+  entityKey: string;
+  entityLabel: string;
+  entityPathLabel: string;
   isPercent: boolean;
   values: { weekLabel: string; value: number | null; rawValue: string }[];
   trend: MetricTrend;
-  /** Variation cumulée entre la première et la dernière semaine disponible */
   cumulativeEvolutionPercent: number | null;
 }
 
 const STABLE_THRESHOLD = 2;
 
-function indexMetrics(metrics: TcdMetric[]): Map<string, TcdMetric> {
-  return new Map(metrics.map((metric) => [metric.key, metric]));
+const GRANULARITY_LABELS: Record<TcdGranularity, string> = {
+  global: "Global",
+  platform: "Plateforme",
+  campaign: "Campagne",
+  adset: "Adset",
+};
+
+export function getGranularityLabel(granularity: TcdGranularity): string {
+  return GRANULARITY_LABELS[granularity];
+}
+
+function indexEntityMetrics(entities: TcdEntity[]): Map<string, Map<string, TcdMetric>> {
+  const result = new Map<string, Map<string, TcdMetric>>();
+  for (const entity of entities) {
+    result.set(entity.key, new Map(entity.metrics.map((metric) => [metric.key, metric])));
+  }
+  return result;
 }
 
 function computeEvolution(
@@ -72,26 +93,26 @@ function computeEvolution(
   };
 }
 
-/**
- * Compare deux jeux de données TCD et calcule l'évolution KPI par KPI.
- */
-export function compareTcd(
-  referenceText: string,
-  referenceTable: ExcelTable | null,
-  currentText: string,
-  currentTable: ExcelTable | null,
-  selectedKpiKeys: string[] = []
-): TcdComparisonResult {
-  const referenceParsed = parseTcdData(referenceText, referenceTable);
-  const currentParsed = parseTcdData(currentText, currentTable);
-  const referenceByKey = indexMetrics(referenceParsed.metrics);
-  const currentByKey = indexMetrics(currentParsed.metrics);
-  const allKeys = new Set([...referenceByKey.keys(), ...currentByKey.keys()]);
-  const comparisons: MetricComparison[] = [];
+function compareEntityMetrics(
+  entityKey: string,
+  entityLabel: string,
+  entityPathLabel: string,
+  referenceMetrics: Map<string, TcdMetric> | undefined,
+  currentMetrics: Map<string, TcdMetric> | undefined,
+  selectedKpiKeys: string[]
+): EntityMetricComparison[] {
+  const allKeys = new Set<string>([
+    ...(referenceMetrics?.keys() ?? []),
+    ...(currentMetrics?.keys() ?? []),
+  ]);
+
+  const comparisons: EntityMetricComparison[] = [];
 
   for (const key of allKeys) {
-    const referenceMetric = referenceByKey.get(key);
-    const currentMetric = currentByKey.get(key);
+    if (selectedKpiKeys.length > 0 && !selectedKpiKeys.includes(key)) continue;
+
+    const referenceMetric = referenceMetrics?.get(key);
+    const currentMetric = currentMetrics?.get(key);
 
     if (referenceMetric && currentMetric) {
       const isPercent = referenceMetric.isPercent || currentMetric.isPercent;
@@ -101,6 +122,9 @@ export function compareTcd(
           : { deltaPoints: null, evolutionPercent: null };
 
       comparisons.push({
+        entityKey,
+        entityLabel,
+        entityPathLabel,
         key,
         label: currentMetric.label || referenceMetric.label,
         referenceValue: referenceMetric.value,
@@ -117,6 +141,9 @@ export function compareTcd(
 
     if (currentMetric) {
       comparisons.push({
+        entityKey,
+        entityLabel,
+        entityPathLabel,
         key,
         label: currentMetric.label,
         referenceValue: null,
@@ -133,6 +160,9 @@ export function compareTcd(
 
     if (referenceMetric) {
       comparisons.push({
+        entityKey,
+        entityLabel,
+        entityPathLabel,
         key,
         label: referenceMetric.label,
         referenceValue: referenceMetric.value,
@@ -147,22 +177,73 @@ export function compareTcd(
     }
   }
 
+  return comparisons;
+}
+
+export function compareTcd(
+  referenceText: string,
+  referenceTable: ExcelTable | null,
+  currentText: string,
+  currentTable: ExcelTable | null,
+  granularity: TcdGranularity = "global",
+  selectedKpiKeys: string[] = [],
+  selectedEntityKeys: string[] = []
+): TcdComparisonResult {
+  const referenceParsed = parseTcdData(referenceText, referenceTable, granularity);
+  const currentParsed = parseTcdData(currentText, currentTable, granularity);
+  const referenceByEntity = indexEntityMetrics(referenceParsed.entities);
+  const currentByEntity = indexEntityMetrics(currentParsed.entities);
+  const allEntityKeys = new Set([...referenceByEntity.keys(), ...currentByEntity.keys()]);
+  const comparisons: EntityMetricComparison[] = [];
+
+  for (const entityKey of allEntityKeys) {
+    if (selectedEntityKeys.length > 0 && !selectedEntityKeys.includes(entityKey)) continue;
+
+    const referenceEntity = referenceParsed.entities.find((entity) => entity.key === entityKey);
+    const currentEntity = currentParsed.entities.find((entity) => entity.key === entityKey);
+
+    comparisons.push(
+      ...compareEntityMetrics(
+        entityKey,
+        currentEntity?.label || referenceEntity?.label || entityKey,
+        currentEntity?.pathLabel || referenceEntity?.pathLabel || entityKey,
+        referenceByEntity.get(entityKey),
+        currentByEntity.get(entityKey),
+        selectedKpiKeys
+      )
+    );
+  }
+
   comparisons.sort((a, b) => {
+    const pathCompare = a.entityPathLabel.localeCompare(b.entityPathLabel, "fr");
+    if (pathCompare !== 0) return pathCompare;
     if (a.status === "matched" && b.status !== "matched") return -1;
     if (b.status === "matched" && a.status !== "matched") return 1;
     return a.label.localeCompare(b.label, "fr");
   });
 
-  const filteredComparisons =
-    selectedKpiKeys.length === 0
-      ? comparisons
-      : comparisons.filter((item) => selectedKpiKeys.includes(item.key));
+  const hierarchyColumns = [
+    ...new Set(
+      [...referenceParsed.hierarchyColumns, ...currentParsed.hierarchyColumns].map(
+        (column) => column.headerLabel
+      )
+    ),
+  ];
 
   return {
-    comparisons: filteredComparisons,
-    referenceMetricCount: referenceParsed.metrics.length,
-    currentMetricCount: currentParsed.metrics.length,
+    granularity,
+    comparisons,
+    entityCount: allEntityKeys.size,
+    referenceMetricCount: referenceParsed.entities.reduce(
+      (count, entity) => count + entity.metrics.length,
+      0
+    ),
+    currentMetricCount: currentParsed.entities.reduce(
+      (count, entity) => count + entity.metrics.length,
+      0
+    ),
     matchedCount: comparisons.filter((item) => item.status === "matched").length,
+    hierarchyColumns,
     warnings: [...referenceParsed.warnings, ...currentParsed.warnings],
   };
 }
@@ -200,66 +281,90 @@ export interface WeekTcdSource {
   tcdTable?: ExcelTable | null;
 }
 
-/**
- * Analyse la tendance multi-semaines d'un KPI sur l'ensemble des snapshots disponibles.
- */
 export function analyzeMetricTrends(
   weeks: WeekTcdSource[],
-  selectedKpiKeys: string[] = []
+  granularity: TcdGranularity = "global",
+  selectedKpiKeys: string[] = [],
+  selectedEntityKeys: string[] = []
 ): MetricTrendAnalysis[] {
   if (weeks.length < 2) return [];
 
   const parsedWeeks = weeks.map((week) => ({
     weekLabel: week.weekLabel,
-    parsed: parseTcdData(week.tcdData, week.tcdTable ?? null),
+    parsed: parseTcdData(week.tcdData, week.tcdTable ?? null, granularity),
   }));
 
-  const allKeys = new Set<string>();
+  const entityKeys = new Set<string>();
   parsedWeeks.forEach(({ parsed }) => {
-    parsed.metrics.forEach((metric) => allKeys.add(metric.key));
+    parsed.entities.forEach((entity) => entityKeys.add(entity.key));
   });
 
   const analyses: MetricTrendAnalysis[] = [];
 
-  for (const key of allKeys) {
-    const values: MetricTrendAnalysis["values"] = [];
-    let label = key;
-    let isPercent = false;
+  for (const entityKey of entityKeys) {
+    if (selectedEntityKeys.length > 0 && !selectedEntityKeys.includes(entityKey)) continue;
 
-    for (const { weekLabel, parsed } of parsedWeeks) {
-      const metric = parsed.metrics.find((item) => item.key === key);
-      if (metric) {
-        label = metric.label;
-        isPercent = metric.isPercent;
+    const kpiKeys = new Set<string>();
+    parsedWeeks.forEach(({ parsed }) => {
+      const entity = parsed.entities.find((item) => item.key === entityKey);
+      entity?.metrics.forEach((metric) => kpiKeys.add(metric.key));
+    });
+
+    for (const kpiKey of kpiKeys) {
+      if (selectedKpiKeys.length > 0 && !selectedKpiKeys.includes(kpiKey)) continue;
+
+      const values: MetricTrendAnalysis["values"] = [];
+      let label = kpiKey;
+      let entityLabel = entityKey;
+      let entityPathLabel = entityKey;
+      let isPercent = false;
+
+      for (const { weekLabel, parsed } of parsedWeeks) {
+        const entity = parsed.entities.find((item) => item.key === entityKey);
+        const metric = entity?.metrics.find((item) => item.key === kpiKey);
+        if (entity) {
+          entityLabel = entity.label;
+          entityPathLabel = entity.pathLabel;
+        }
+        if (metric) {
+          label = metric.label;
+          isPercent = metric.isPercent;
+        }
+        values.push({
+          weekLabel,
+          value: metric?.value ?? null,
+          rawValue: metric?.rawValue ?? "—",
+        });
       }
-      values.push({
-        weekLabel,
-        value: metric?.value ?? null,
-        rawValue: metric?.rawValue ?? "—",
+
+      const numericValues = values.map((item) => item.value).filter((v): v is number => v !== null);
+      const first = numericValues[0];
+      const last = numericValues[numericValues.length - 1];
+
+      analyses.push({
+        key: kpiKey,
+        label,
+        entityKey,
+        entityLabel,
+        entityPathLabel,
+        isPercent,
+        values,
+        trend: detectTrend(numericValues),
+        cumulativeEvolutionPercent:
+          first !== undefined && last !== undefined && first !== 0
+            ? ((last - first) / Math.abs(first)) * 100
+            : null,
       });
     }
-
-    const numericValues = values.map((item) => item.value).filter((v): v is number => v !== null);
-    const first = numericValues[0];
-    const last = numericValues[numericValues.length - 1];
-    const cumulativeEvolutionPercent =
-      first !== undefined && last !== undefined && first !== 0
-        ? ((last - first) / Math.abs(first)) * 100
-        : null;
-
-    analyses.push({
-      key,
-      label,
-      isPercent,
-      values,
-      trend: detectTrend(numericValues),
-      cumulativeEvolutionPercent,
-    });
   }
 
-  const sorted = analyses.sort((a, b) => a.label.localeCompare(b.label, "fr"));
-  if (selectedKpiKeys.length === 0) return sorted;
-  return sorted.filter((item) => selectedKpiKeys.includes(item.key));
+  const sorted = analyses.sort((a, b) => {
+    const pathCompare = a.entityPathLabel.localeCompare(b.entityPathLabel, "fr");
+    if (pathCompare !== 0) return pathCompare;
+    return a.label.localeCompare(b.label, "fr");
+  });
+
+  return sorted;
 }
 
 export function formatEvolution(value: number | null, isPercent: boolean): string {
